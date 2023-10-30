@@ -1,0 +1,3383 @@
+---
+title: "Krill and Lagrangian Features"
+subtitle: "Methods and Analysis"
+author:
+  - "James A. Fahlbusch"
+  - "David E. Cade"
+  - "Elliott L. Hazen"
+  - "Meredith L. Elliott" 
+  - "Benjamin T. Saenz"
+  - "Jeremy A. Goldbogen"
+  - "Jaime Jahncke"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+email: musculus@stanford.edu
+output:
+  html_document:
+    code_folding: hide
+    toc: yes
+    toc_depth: 5
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+    df_print: paged
+  html_notebook:
+    code_folding: hide
+    df_print: paged
+    toc: yes
+    toc_depth: 5
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+---
+
+```{r global_options, echo = FALSE, include = FALSE}
+options(width = 1600)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,fig.align='center',
+                      cache = TRUE, tidy = FALSE, size = "small", collapse= TRUE)
+```
+
+<style>
+pre {
+  overflow-x: auto;
+}
+pre code {
+  word-wrap: normal;
+  white-space: pre;
+}
+</style>
+
+
+Load Packages and Data
+
+```{r loadPackagesData, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#### Load Libraries and Functions ####
+pkgTest <- function(x)
+{
+  if (!require(x,character.only = TRUE))
+  {
+    install.packages(x,dep=TRUE)
+    if(!require(x,character.only = TRUE)) stop("Package not found")
+  }
+}
+pkgTest("tidyverse")
+pkgTest("lubridate")
+pkgTest("ggpubr") # for ggarrange
+pkgTest("rnaturalearth") # for map base layers
+pkgTest("paletteer")
+pkgTest("metR") # for plotting bathy contours
+pkgTest("ggspatial") # for plotting map annotations
+pkgTest("kableExtra")
+pkgTest("raster")
+pkgTest("geodist") # for calculating distances
+
+# Stats Analysis
+pkgTest("lme4")
+pkgTest("MASS")
+pkgTest("mgcv")
+pkgTest("stats")
+pkgTest("sjPlot")
+pkgTest("sjlabelled")
+pkgTest("gridExtra") # for grid.arrange
+pkgTest("AICcmodavg")
+
+# For FTLE Plots
+pkgTest("viridis")
+pkgTest("ncdf4")
+pkgTest("marmap")
+pkgTest("sf")
+pkgTest("ggnewscale")
+
+# Process netCDF file dates and times
+source("./functions/ncdate.R")
+# Note: getNOAA.bathy was not working, but an alternate version on github is used here
+source('./functions/getNOAAbathy.R')
+# Get Sunrise and sunset times
+source("./functions/find_Astronomical.R")
+
+#Function to convert between Logit and Probability
+logit2prob <- function(logit){
+  odds <- exp(logit)
+  prob <- odds / (1 + odds)
+  return(prob)
+}
+# Function to select items Not In a group
+`%notin%` <- Negate(`%in%`)
+
+## Load Data
+world <- ne_countries(scale = "large", returnclass = "sf")
+load("./Figure_Files/Map_Data/bf.RData")
+load("./Figure_Files/Map_Data/bf_Sub.RData")
+load("./Figure_Files/Map_Data/HFRadarCoverageMCP.RData")
+load("./Figure_Files/Map_Data/hfRadarStations.RData")
+# HF Radar Coverage Area and Station Locations
+hfRadarStns$ID <- "HF Radar Station"
+hfRadar_DF <- as.data.frame(hfRadarStns)
+hfRadar_DF$Long <- st_coordinates(hfRadarStns$geometry)[,1]
+hfRadar_DF$Lat <- st_coordinates(hfRadarStns$geometry)[,2]
+
+## Cetacean Data
+load("./dataProcessed/cetacean_DF_FTLE.RData")
+
+## Krill Data
+load("./dataProcessed/acousticsFTLE600cols_Bathy.RData") 
+load("./dataProcessed/acoustics_DF_FTLE_Line_w600.RData") # Full 200m X 5m Krill dataset 
+
+## CTD Data
+load("./dataProcessed/castSummary_FTLE.RData")
+
+## Load previously saved Models
+# Krill Presence/Absence
+if (file.exists("./Models/krill_glmmPQL_CorExp_24_Hrs.rds")) {
+  krill_glmmPQL_CorExp_24_Hrs <- readRDS("./Models/krill_glmmPQL_CorExp_24_Hrs.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krill_glmmPQL_CorExp_24_Hrs.rds, will need to recreate below."))
+  }
+if (file.exists("./Models/krill_glmmPQL_CorExp_48_Hrs.rds")) {
+  krill_glmmPQL_CorExp_48_Hrs <- readRDS("./Models/krill_glmmPQL_CorExp_48_Hrs.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krill_glmmPQL_CorExp_48_Hrs.rds, will need to recreate below."))
+  }
+if (file.exists("./Models/krill_glmmPQL_CorExp_120_Hrs.rds")) {
+  krill_glmmPQL_CorExp_120_Hrs <- readRDS("./Models/krill_glmmPQL_CorExp_120_Hrs.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krill_glmmPQL_CorExp_120_Hrs.rds, will need to recreate below."))
+  }
+if (file.exists("./Models/krill_glmmPQL_CorExp_240_Hrs.rds")) {
+  krill_glmmPQL_CorExp_240_Hrs <- readRDS("./Models/krill_glmmPQL_CorExp_240_Hrs.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krill_glmmPQL_CorExp_240_Hrs.rds, will need to recreate below."))
+  }
+
+# Krill Mean Density Log-Link
+if (file.exists("./Models/krillDensity_MNZGLMMPQLLogLink24.rds")) {
+  krillDensity_MNZGLMMPQLLogLink24 <- readRDS("./Models/krillDensity_MNZGLMMPQLLogLink24.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krillDensity_MNZGLMMPQLLogLink24.rds, will need to recreate below."))
+  }
+if (file.exists("./Models/krillDensity_MNZGLMMPQLLogLink48.rds")) {
+  krillDensity_MNZGLMMPQLLogLink48 <- readRDS("./Models/krillDensity_MNZGLMMPQLLogLink48.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krillDensity_MNZGLMMPQLLogLink48.rds, will need to recreate below."))
+  }
+if (file.exists("./Models/krillDensity_MNZGLMMPQLLogLink120.rds")) {
+  krillDensity_MNZGLMMPQLLogLink120 <- readRDS("./Models/krillDensity_MNZGLMMPQLLogLink120.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krillDensity_MNZGLMMPQLLogLink120.rds, will need to recreate below."))
+  }
+if (file.exists("./Models/krillDensity_MNZGLMMPQLLogLink240.rds")) {
+  krillDensity_MNZGLMMPQLLogLink240 <- readRDS("./Models/krillDensity_MNZGLMMPQLLogLink240.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krillDensity_MNZGLMMPQLLogLink240.rds, will need to recreate below."))
+  }
+
+# Krill GeoMean Density Log-Link
+if (file.exists("./Models/krillDensity_gMNZGLMMPQLLogLink24.rds")) {
+  krillDensity_gMNZGLMMPQLLogLink24 <- readRDS("./Models/krillDensity_gMNZGLMMPQLLogLink24.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krillDensity_gMNZGLMMPQLLogLink24.rds, will need to recreate below."))
+  }
+if (file.exists("./Models/krillDensity_gMNZGLMMPQLLogLink48.rds")) {
+  krillDensity_gMNZGLMMPQLLogLink48 <- readRDS("./Models/krillDensity_gMNZGLMMPQLLogLink48.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krillDensity_gMNZGLMMPQLLogLink48.rds, will need to recreate below."))
+}
+if (file.exists("./Models/krillDensity_gMNZGLMMPQLLogLink120.rds")) {
+  krillDensity_gMNZGLMMPQLLogLink120 <- readRDS("./Models/krillDensity_gMNZGLMMPQLLogLink120.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krillDensity_gMNZGLMMPQLLogLink120.rds, will need to recreate below."))
+}
+if (file.exists("./Models/krillDensity_gMNZGLMMPQLLogLink240.rds")) {
+  krillDensity_gMNZGLMMPQLLogLink240 <- readRDS("./Models/krillDensity_gMNZGLMMPQLLogLink240.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krillDensity_gMNZGLMMPQLLogLink240.rds, will need to recreate below."))
+  }
+
+# Krill Maximum Density Log-Link
+if (file.exists("./Models/krillDensity_MaxGLMMPQLLogLink24.rds")) {
+  krillDensity_MaxGLMMPQLLogLink24 <- readRDS("./Models/krillDensity_MaxGLMMPQLLogLink24.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krillDensity_MaxGLMMPQLLogLink24.rds, will need to recreate below."))
+  }
+if (file.exists("./Models/krillDensity_MaxGLMMPQLLogLink48.rds")) {
+  krillDensity_MaxGLMMPQLLogLink48 <- readRDS("./Models/krillDensity_MaxGLMMPQLLogLink48.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krillDensity_MaxGLMMPQLLogLink48.rds, will need to recreate below."))
+}
+if (file.exists("./Models/krillDensity_MaxGLMMPQLLogLink120.rds")) {
+  krillDensity_MaxGLMMPQLLogLink120 <- readRDS("./Models/krillDensity_MaxGLMMPQLLogLink120.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krillDensity_MaxGLMMPQLLogLink120.rds, will need to recreate below."))
+}
+if (file.exists("./Models/krillDensity_MaxGLMMPQLLogLink240.rds")) {
+  krillDensity_MaxGLMMPQLLogLink240 <- readRDS("./Models/krillDensity_MaxGLMMPQLLogLink240.rds")
+} else { 
+  cat(paste0("Could not find ./Models/krillDensity_MaxGLMMPQLLogLink240.rds, will need to recreate below."))
+  }
+
+## Process Cetacean Data for Analysis
+# Create a subset dataset that removes Minke and Gray Whales, and removes distant sighting outliers 
+cetacean_Sub <- cetacean_DF_FTLE  %>% 
+  dplyr::filter(Type == "ACC") %>% 
+  dplyr::filter(SpCode %notin% c('MIWH','GRWH','UNWH','FIWH'), 
+                DisFrShipNm < 0.5) # 0.5nm is approximately 900m 
+
+# Create a Ship-Track Cetacean Sightings Dataset to join to Acoustics
+cetacean_Ship <- cetacean_Sub %>% 
+  dplyr::filter(!is.na(Col600)) %>% 
+  group_by(Cruise, Line, Col600) %>% 
+  summarize(BLWH = ifelse(length(SpCode[SpCode == "BLWH"])>0, 1,0),
+            HUWH = ifelse(length(SpCode[SpCode == "HUWH"])>0, 1,0)
+            ) 
+
+# Extract CTD Cast Locations for Plotting
+ctd_Stations <- castSummary_FTLE %>% 
+   dplyr::filter(Cruise %notin% c("ACD1807", "ACM1705")) %>% 
+  group_by(Lat, Long) %>% summarize(Lat = first(Lat),Long=first(Long))
+# Create a summary of CTD casts
+dataCTD <- castSummary_FTLE %>% 
+  dplyr::filter(Cruise %notin% c("ACD1807", "ACM1705")) %>%  # Limit to Gulf of the Farallones only.
+  dplyr::filter(maxDepth >= 50) %>% # Remove shallow water casts
+  mutate(Year = year(dttz),
+         mo = month(dttz),
+         Season = if_else(mo<7,"Spring",if_else(mo==7,"Summer","Fall"  )))
+# Save data for use in figure creation
+save(dataCTD,file=paste0("./Figure_Files/dataCTD.RData"))
+
+# Process Krill data for analysis
+dataGamm <- acousticsFTLE600cols_Bathy %>% 
+  # Add Cetacean Sightings
+  left_join(cetacean_Ship, by = c("Cruise", "Line", "Col600")) %>% 
+   mutate(BLWH = ifelse(is.na(BLWH), 0, BLWH),
+          HUWH = ifelse(is.na(HUWH), 0, HUWH)
+          ) %>% 
+  dplyr::filter(Type == "ACC",  # Limit to Gulf of the Farallones only.
+                astronomical == "day") %>% # Subset Data to only include daytime observations
+  # Create Categorization Columns for Analysis
+  mutate(Year = year(dttz),
+         Season = if_else(month(dttz)<7,"Spring",if_else(month(dttz)==7,"Summer","Fall"  )),
+         KrillPresence = if_else(KrillBiomass == 0, 0, 1)
+         ) %>% 
+  arrange(Cruise,Line,dttz)
+# Save data for use in figure creation
+save(dataGamm,file=paste0("./Figure_Files/dataGamm.RData"))
+```
+
+
+# Overview
+
+Exploring the scale of surface oceanographic processes as they relate to krill density and distribution, cetacean distribution and oceanographic features.
+
+## Research Questions
+
+* **Oceanography-Related**
+  1. Is there an oceanographic signature at FTLE features?
+      + Do surface FTLE features correspond to density differences at the surface, 10, 20, 30, 40 or 50 meters? 
+        + Linear Regression (GLMM using CTD data)
+
+* **Krill-Related**
+  2. Is Krill presence more likely in areas with higher  FTLE?
+      + Is FTLE for areas with Krill higher than areas without Krill? (And if so, at what temporal scale is the relationship most prevalent?)
+        + Logistic Regression (GLMM) 
+  3. Does Krill Density increase with increasing FTLE?
+      + For areas that have krill, does krill density increase with increasing FTLE? (And if so, at what temporal scale is the relationship most prevalent?)
+        + We look at several metrics for Density (Geometric Mean of Non Zero Cells, Mean Density of Non Zero Cells, Max Density)
+        + Linear Regression (GLMM)
+
+* **Whale-Related**
+  4. Are Cetacean sightings more likely in areas with higher FTLE?
+      + How does this differ between species and across FTLE Integration times?
+        + Logistic Regression (GLMM)
+
+## Data Summary 
+
+### Temporal Overview
+
+ACCESS completed 21 Cruises in the Gulf of the Farallones Region between 2012 and 2018 with 3 Cruises each year (Spring, Summer and Fall). Most of the cruises collected CTD data (with several exceptions) and we included only survey data from daytime hours.
+
+```{r dataSum, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+  CTD_Sum <- dataCTD %>%
+    group_by(Cruise) %>%
+    summarize(CTD_Casts = n())
+
+  # Calculate the length of each transect line
+  lineDistances <- dataGamm %>% 
+    dplyr::filter(Type == "ACC") %>%  # Limit to standard ACCESS cruise lines only
+    group_by(Cruise, Line) %>%
+    summarize(Start = round_date(min(dttz),unit="hours"),
+              End =  round_date(max(dttz),unit="hours"), 
+              Duration = round(difftime(End,Start,units="hours"),2),
+              TransectDistance = round(as.numeric(geodist::geodist_vec(x1 = first(Long), x2 = last(Long), 
+                                                      y1 = first(Lat), y2 = last(Lat)))/1000,1)
+              ) 
+  # Calculate the length of all lines in each cruise
+  lineDistanceSum <- lineDistances %>% 
+    group_by(Cruise) %>%
+    summarize(Transect_Distance = sum(TransectDistance)
+              )
+    
+  # Summary of Cruise start and end times
+  table1 <- dataGamm %>% 
+    dplyr::filter(Type == "ACC") %>%  # Limit to standard ACCESS cruise lines only
+    group_by(Cruise) %>% 
+    summarize(Start = round_date(min(dttz),unit="days"),
+              End =  round_date(max(dttz),unit="days"), 
+              Duration = round(difftime(End,Start,units="days"),2),
+              Lines = length(unique(Line))) %>% 
+    left_join(CTD_Sum) %>% 
+    mutate(CTD_Casts = if_else(is.na(CTD_Casts),as.integer(0),CTD_Casts)) %>% 
+    left_join(lineDistanceSum) 
+kable(table1,row.names = FALSE,longtable=T) %>% 
+  kable_styling(latex_options=c("striped","repeat_header", "scale_down"))
+```
+
+### Spatial Overview
+
+The ACCESS Survey transect lines generally run along latitudinal parallels spanning the Greater Farallones and Cordell Bank National Marine Sanctuaries. These surveys sampled in 3 seasons (Spring, Summer, and Fall) and our dataset has been limited to the years 2012-2018 to overlap with HF Radar data coverage in the region. 
+
+```{r plotLines, echo=TRUE, fig.height=12, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+# All Lines Together
+ p_AllLines <-  dataGamm %>% 
+    dplyr::select(Line, Lat,Long) %>% 
+    unique() %>%   
+    ggplot() +
+    geom_sf(data = world,color=NA,fill=NA) +
+    # add 200m contour
+    geom_contour(data = bf,
+                 aes(x=x, y=y, z=z),
+                 breaks=c(-100,-200,-400,-800,-1600),
+                 size=c(0.4),
+                 colour="darkgrey", show.legend = FALSE) +
+    geom_text_contour(data = bf, aes(x=x, y=y,z = z),breaks=c(-100,-200,-400,-800,-1600),
+                      show.legend = FALSE, size = 2.2, alpha = .6, nudge_y = -.002) +
+    geom_point(aes(Long,Lat,color="ACCESS Krill Column"),alpha=.8,stroke=0.9,size=2, shape=21,show.legend = TRUE) +
+    geom_sf(data = world, size=.75,fill="grey") +
+    geom_point(data=dataCTD, aes(x=Long, y=Lat, alpha="CTD Cast"),size=5)+
+    geom_point(data=hfRadar_DF,
+             aes(x=Long, y=Lat, shape = ID),color="black",size=3.5,stroke=1.5,
+             fill = 'white') +
+    scale_color_manual(values = c("ACCESS Krill Column"="#046C9A")) +
+    scale_alpha_manual(values=c("CTD Cast"=1))+
+    scale_shape_manual(values = c("HF Radar Station" = 23))+
+    coord_sf(xlim = c(min(dataGamm$Long,na.rm = TRUE)-.15,
+                      max(dataGamm$Long,na.rm = TRUE)+.25),
+             ylim = c(min(dataGamm$Lat,na.rm = TRUE)-.15,
+                      max(dataGamm$Lat,na.rm = TRUE)+.15), expand = FALSE) +
+  annotation_scale(location = "bl", width_hint = 0.5, text_face = "bold", 
+                   text_col = "black",text_cex = 1.2) + 
+  annotation_north_arrow(location = "bl", 
+                         which_north = "true", 
+                         pad_x = unit(0.25, "in"), 
+                         pad_y = unit(0.25, "in"), 
+                         style = north_arrow_fancy_orienteering) + 
+    xlab("Longitude") + 
+    ylab("Latitude") + 
+    ggtitle("ACCESS Transect Lines (2012-2018)") +
+    guides(color = guide_legend(order=1, override.aes = list(size=4, stroke=2)))+
+    theme(panel.grid.major = element_line(color = gray(.5), linetype = "dashed", size = 0.5), 
+          panel.background = element_rect(fill = "aliceblue"),
+          axis.title = element_blank(),
+        axis.text = element_text( face="bold", size=22),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=18,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=14,hjust = 0),
+        legend.position= c(0.245,0.115),
+        legend.key = element_blank(),
+        legend.box.background = element_rect(color = "white",fill="white"),
+        legend.background = element_rect(color = "white",fill="white"),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_blank()) 
+p_AllLines
+```
+
+# Methods
+
+## FTLE
+
+A recent study in the same region (Gough et al 2016) found good agreement between SST and LCS during summer months (though the relationship fell apart during strong upwelling-favorable winds in late March). Here we use the 2 integration durations used in that study (1 and 5 days), the integration used in Fahlbusch et al 2021 (2 days) as well as a longer period for comparison (10 days) to examine the interaction between krill density and distribution and Lagrangian Coherent Structures (LCS) during summer months. 
+**Here we see a comparison of the 4 integration times for a single survey transect line in 2012.** 
+
+```{r acousticsMap, echo=TRUE, fig.height=11.7725, fig.width=14, message=FALSE, warning=FALSE, paged.print=TRUE}
+#### Setup ####
+tzOffset <- "Etc/GMT+7" # all surveys are on the same one
+FTLEdatapath <- "./dataRaw/FTLE/"
+degreeBuffer <- .25 
+quantilePlot <- seq(.3,.95,by=.07) 
+
+c = "ACC1207" # Cruise
+l = "6" # Line 
+  data_Sub <- dataGamm %>%
+    dplyr::filter(Cruise == c, Line == l) 
+# Subset full resolution acoustics data for this cruise/line
+d_Sub_Line <- acoustics_DF_FTLE_W600 %>%
+  dplyr::filter(Cruise == c, Line == l)
+# Create a column summary for this line
+lineSum <- d_Sub_Line %>% 
+  mutate(minCID = min(as.integer(d_Sub_Line$ColumnID))) %>% 
+  group_by(ColumnID) %>% 
+  summarise(dttz = first(dttz),
+            Lat = first(Lat),
+            Long = first(Long),
+            ftle24=first(ftle24_L),
+            ftle48=first(ftle48_L),
+            ftle120=first(ftle120_L),
+            ftle240=first(ftle240_L),
+            botDepth = first(BotDepth),
+            KrillBiomass = sum(KrillBiomass),
+            numWith = sum(KrillBiomass>0),
+            density = if_else(numWith > 0, mean(KrillDensity[KrillDensity>0]),0),
+            logDensity = if_else(density==0, -4,log(density)),
+            x = (as.integer(first(ColumnID))-first(minCID))*200) 
+
+# Load the FTLE data
+FTLE_stack24 <- stack(paste0(FTLEdatapath,c,"_FTLE_24Hrs.nc"), 
+                      varname = "FTLE")
+FTLE_stack48 <- stack(paste0(FTLEdatapath,c,"_FTLE_48Hrs.nc"), 
+                      varname = "FTLE")
+FTLE_stack120 <- stack(paste0(FTLEdatapath,c,"_FTLE_120Hrs.nc"),
+                      varname = "FTLE")
+FTLE_stack240 <- stack(paste0(FTLEdatapath,c,"_FTLE_240Hrs.nc"),
+                      varname = "FTLE")
+# FTLE PLOT
+ftle_alpha <- function(n, flatten, scrunch) {
+  c(scales::rescale(exp((1:flatten)/scrunch), to = c(0.25, 1)), rep(1, n - flatten))
+}
+
+#Determine Quantiles for FTLE Color Scaling
+qFTLE24 <- quantile(FTLE_stack24, probs = quantilePlot,na.rm=TRUE)
+qSumFTLE24 <- as.data.frame(summary(qFTLE24)) %>% 
+  dplyr::select(-Var1) %>% 
+  dplyr::filter(grepl("Mean",Freq)) %>%
+  group_by(Var2) %>% 
+  mutate(Means = unlist(str_split(Freq,":"))[2]) %>% 
+  ungroup()
+qFTLE48 <- quantile(FTLE_stack48, probs = quantilePlot,na.rm=TRUE)
+qSumFTLE48 <- as.data.frame(summary(qFTLE48)) %>% 
+  dplyr::select(-Var1) %>% 
+  dplyr::filter(grepl("Mean",Freq)) %>%
+  group_by(Var2) %>% 
+  mutate(Means = unlist(str_split(Freq,":"))[2]) %>% 
+  ungroup()
+qFTLE120 <- quantile(FTLE_stack120, probs = quantilePlot,na.rm=TRUE)
+qSumFTLE120 <- as.data.frame(summary(qFTLE120)) %>% 
+  dplyr::select(-Var1) %>% 
+  dplyr::filter(grepl("Mean",Freq)) %>%
+  group_by(Var2) %>% 
+  mutate(Means = unlist(str_split(Freq,":"))[2]) %>% 
+  ungroup()
+qFTLE240 <- quantile(FTLE_stack240,probs = quantilePlot,na.rm=TRUE)
+qSumFTLE240 <- as.data.frame(summary(qFTLE240)) %>% 
+  dplyr::select(-Var1) %>% 
+  dplyr::filter(grepl("Mean",Freq)) %>%
+  group_by(Var2) %>% 
+  mutate(Means = unlist(str_split(Freq,":"))[2]) %>% 
+  ungroup()
+
+#### Maps ####
+
+  # create a dataframe of each integration
+  FTLE_spdf24 <- as(mean(FTLE_stack24[[first(d_Sub_Line$lineMinI):first(d_Sub_Line$lineMaxI)]]), "SpatialPixelsDataFrame")
+  FTLE_df24 <- as.data.frame(FTLE_spdf24)
+  colnames(FTLE_df24) <- c("FTLE", "x", "y")
+  FTLE_spdf48 <- as(mean(FTLE_stack48[[first(d_Sub_Line$lineMinI):first(d_Sub_Line$lineMaxI)]]), "SpatialPixelsDataFrame")
+  FTLE_df48 <- as.data.frame(FTLE_spdf48)
+  colnames(FTLE_df48) <- c("FTLE", "x", "y")
+  FTLE_spdf120 <- as(mean(FTLE_stack120[[first(d_Sub_Line$lineMinI):first(d_Sub_Line$lineMaxI)]]), "SpatialPixelsDataFrame")
+  FTLE_df120 <- as.data.frame(FTLE_spdf120)
+  colnames(FTLE_df120) <- c("FTLE", "x", "y")
+  FTLE_spdf240 <- as(mean(FTLE_stack240[[first(d_Sub_Line$lineMinI):first(d_Sub_Line$lineMaxI)]]), "SpatialPixelsDataFrame")
+  FTLE_df240 <- as.data.frame(FTLE_spdf240)
+  colnames(FTLE_df240) <- c("FTLE", "x", "y")
+
+# 24 ####  
+p24 <- ggplot() +
+  geom_sf(data = world,color=NA,fill=NA) +
+  geom_raster(data = FTLE_df24[complete.cases(FTLE_df24),], 
+                mapping = aes(x, y, fill = FTLE)) +
+  labs(x="", y="") +
+  scale_fill_gradientn(colors = viridis(option = "plasma", n = 40, 
+                                        alpha = ftle_alpha(40, 8, 8)),
+                       limits=c(0, 1.25), 
+                       breaks = c(0,0.6,1.2),
+                       values = scales::rescale(
+                           c(0,as.numeric(qSumFTLE24$Means[1:9]))),
+                       oob=scales::squish,
+                       na.value = NA,
+                       name = expression(atop( bold('FTLE (24 hr)'), 
+                                               bold(day^bold({bold("-1")})) )) ) +
+  # add 100m and 200m contours
+  ggplot2::geom_contour(data = bf_Sub,
+                        mapping = aes(x=x, y=y, z=z),
+                        breaks=c(-100),
+                        size=c(0.4),
+                        colour="darkgray", show.legend = FALSE) +
+  metR::geom_text_contour(data = bf_Sub, mapping = aes(x=x,y=y,z=z),
+                          breaks = c(-100), show.legend = FALSE, 
+                          size = 2.5, alpha = .8, nudge_y = -.002,
+                          color="lightgrey") +
+  ggplot2::geom_contour(data = bf_Sub,
+                        mapping = aes(x=x, y=y, z=z),
+                        breaks=c(-200),
+                        size=c(0.4),
+                        colour="darkgray", show.legend = FALSE) +
+  metR::geom_text_contour(data = bf_Sub, mapping = aes(x=x,y=y,z=z),
+                          breaks = c(-200), 
+                          label.placement = label_placement_n(5),
+                          show.legend = FALSE, size = 2.5, alpha = .8,
+                          nudge_y = -.002, color="lightgrey") +
+  geom_point(data = data_Sub, 
+             mapping = aes(Long,Lat, color=KrillDensity_MeanNonZero ),#
+             size=5,shape=15, show.legend = TRUE, 
+             alpha = 1, fill="black") +
+  geom_label(data = lineSum[c(1,length(lineSum$ColumnID) ),],
+             mapping = aes(Long,Lat),label=c("Start","End"),
+             size=2.5,nudge_y = .02)+
+  scale_color_gradient(name = expression(atop(bold("Krill Density"),
+                                              bold(log[e](g/m^3)) )), 
+                       low="white",
+                       high="magenta",
+                       na.value = "white", 
+                       limits = c(0,4),
+                       breaks=seq(0,5,1),
+                       oob=scales::squish) +
+  geom_sf(data = world, size=1.25,fill="lightgrey",color="grey") +
+  geom_sf(data = world, size=1.25,fill="lightgrey",color="grey") +
+  coord_sf(xlim = c(min(d_Sub_Line$Long,na.rm = TRUE)-degreeBuffer,
+                    max(d_Sub_Line$Long,na.rm = TRUE)+degreeBuffer), 
+           ylim = c(min(d_Sub_Line$Lat,na.rm = TRUE)-0.35,
+                    max(d_Sub_Line$Lat,na.rm = TRUE)+0.35), 
+           expand = FALSE) +
+  theme_classic() +
+  annotation_scale(location = "br", width_hint = 0.5, text_face = "bold", text_col = "grey") + 
+  annotation_north_arrow(location = "br", 
+                         which_north = "true", 
+                         pad_x = unit(0.25, "in"), 
+                         pad_y = unit(0.25, "in"), 
+                         style = north_arrow_fancy_orienteering(line_col = "grey",
+                                                                fill = c("white", "black"),
+                                                                text_col = "grey"  ) ) + 
+  xlab("Longitude") + 
+  ylab("Latitude") + 
+  guides(color = guide_colourbar(order=1,direction = 'horizontal' ,
+                                 title.position = "top", 
+                                 title.hjust = .5,
+                                 label.position = "bottom"), 
+         fill = guide_colourbar(order=2,direction = 'horizontal', 
+                                title.position = "top", 
+                                title.hjust = .5,
+                                label.position = "bottom")) +
+  theme(panel.grid.major = element_line(color = gray(.5), 
+                                        linetype = "dashed", size = 0.5),
+        panel.background = element_rect(fill = "aliceblue"),
+        axis.text = element_text(face="bold", size=10),
+        axis.title = element_blank(),
+        legend.text = element_text(face="bold", size=10),
+        legend.position = c(.125,.2),
+        legend.box = 'vertical',
+        legend.title = element_text(face="bold", size=12),
+        legend.box.background = element_rect(color="white",
+                                             size=2.5, fill="white"),
+        legend.spacing.y = unit(0.025, "cm"),
+        # adds a buffer on the sides so the plot is centered
+        plot.margin=margin(t = 0.5, r = 1, b = 0, l = 0.25, "cm"), 
+        plot.title = element_text(face="bold", size=24, hjust = 0.5),
+        plot.subtitle = element_text(face="bold", size=20, hjust = 0.5))
+
+# 48 ####
+p48 <- ggplot()+
+  geom_sf(data = world,color=NA,fill=NA) +
+  geom_raster(data = FTLE_df48[complete.cases(FTLE_df48),], 
+              mapping = aes(x, y, fill = FTLE)) +
+  labs(x="", y="") +
+  scale_fill_gradientn(colors = viridis(option = "plasma", n = 40, 
+                                        alpha = ftle_alpha(40, 8, 8)),
+                       values = scales::rescale(
+                         c(0,as.numeric(qSumFTLE48$Means[1:9]))),
+                       limits=c(0, 1), 
+                       breaks = c(0,0.5,1),
+                       oob=scales::squish,
+                       na.value = NA,
+                       name = expression(atop( bold('FTLE (48 hr)'), 
+                                               bold(day^bold({bold("-1")})) )) ) +
+  # add 100m and 200m contours
+  ggplot2::geom_contour(data = bf_Sub,
+                        mapping = aes(x=x, y=y, z=z),
+                        breaks=c(-100),
+                        size=c(0.4),
+                        colour="darkgray", show.legend = FALSE) +
+  metR::geom_text_contour(data = bf_Sub, mapping = aes(x=x,y=y,z=z),
+                          breaks = c(-100), show.legend = FALSE, 
+                          size = 2.5, alpha = .8, nudge_y = -.002,
+                          color="lightgrey") +
+  ggplot2::geom_contour(data = bf_Sub,
+                        mapping = aes(x=x, y=y, z=z),
+                        breaks=c(-200),
+                        size=c(0.4),
+                        colour="darkgray", show.legend = FALSE) +
+  metR::geom_text_contour(data = bf_Sub, mapping = aes(x=x,y=y,z=z),
+                          breaks = c(-200), 
+                          label.placement = label_placement_n(5),
+                          show.legend = FALSE, size = 2.5, alpha = .8,
+                          nudge_y = -.002, color="lightgrey") +
+  geom_point(data = data_Sub, 
+             mapping = aes(Long,Lat, color=KrillDensity_MeanNonZero ),
+             size=5,shape=15, show.legend = TRUE, 
+             alpha = 1, fill="black") +
+  geom_label(data = lineSum[c(1,length(lineSum$ColumnID) ),],
+             mapping = aes(Long,Lat),label=c("Start","End"),
+             size=2.5,nudge_y = .02)+
+  scale_color_gradient(name = expression(atop(bold("Krill Density"),
+                                              bold(log[e](g/m^3)) )), 
+                       low="white",
+                       high="magenta",
+                       na.value = "white", 
+                       limits = c(0,4),
+                       breaks=seq(0,5,1),
+                       oob=scales::squish) +
+  geom_sf(data = world, size=1.25,fill="lightgrey",color="grey") +
+  coord_sf(xlim = c(min(d_Sub_Line$Long,na.rm = TRUE)-degreeBuffer,
+                    max(d_Sub_Line$Long,na.rm = TRUE)+degreeBuffer), 
+           ylim = c(min(d_Sub_Line$Lat,na.rm = TRUE)-0.35,
+                    max(d_Sub_Line$Lat,na.rm = TRUE)+0.35), 
+           expand = FALSE) +
+  theme_classic() +
+  annotation_scale(location = "br", width_hint = 0.5, text_face = "bold", text_col = "grey") + 
+  annotation_north_arrow(location = "br", 
+                         which_north = "true", 
+                         pad_x = unit(0.25, "in"), 
+                         pad_y = unit(0.25, "in"), 
+                         style = north_arrow_fancy_orienteering(line_col = "grey",
+                                                                fill = c("white", "black"),
+                                                                text_col = "grey"  ) ) + 
+  xlab("Longitude") + 
+  ylab("Latitude") + 
+  guides(color = guide_colourbar(order=1,direction = 'horizontal' ,
+                                 title.position = "top", 
+                                 title.hjust = .5,
+                                 label.position = "bottom"), 
+         fill = guide_colourbar(order=2,direction = 'horizontal', 
+                                title.position = "top", 
+                                title.hjust = .5,
+                                label.position = "bottom")) +
+  theme(panel.grid.major = element_line(color = gray(.5), 
+                                        linetype = "dashed", size = 0.5),
+        panel.background = element_rect(fill = "aliceblue"),
+        axis.text = element_text(face="bold", size=10),
+        axis.title = element_blank(),
+        legend.text = element_text(face="bold", size=10),
+        legend.position = c(.125,.2),
+        legend.box = 'vertical',
+        legend.title = element_text(face="bold", size=12),
+        legend.box.background = element_rect(color="white",
+                                             size=2.5, fill="white"),
+        legend.spacing.y = unit(0.025, "cm"),
+        # adds a buffer on the sides so the plot is centered
+        plot.margin=margin(t = 0.5, r = 1, b = 0, l = 0.25, "cm"), 
+        plot.title = element_text(face="bold", size=24, hjust = 0.5),
+        plot.subtitle = element_text(face="bold", size=20, hjust = 0.5))
+
+# 120 ####
+p120 <- ggplot()+
+  geom_sf(data = world,color=NA,fill=NA) +
+  geom_raster(data = FTLE_df120[complete.cases(FTLE_df120),], 
+             mapping = aes(x, y, fill = FTLE)) +
+  labs(x="", y="") +
+  scale_fill_gradientn(colors = viridis(option = "plasma", n = 40, 
+                                        alpha = ftle_alpha(40, 8, 8)),
+                       values = scales::rescale(
+                         c(0,as.numeric(qSumFTLE120$Means[1:9]))),
+                       limits=c(0, .8), 
+                       breaks = c(0,.4,.8),
+                       oob=scales::squish,
+                       na.value = NA,
+                       name = expression(atop( bold('FTLE (120 hr)'), 
+                                               bold(day^bold({bold("-1")})) )) ) +
+  # add 100m and 200m contours
+  ggplot2::geom_contour(data = bf_Sub,
+                        mapping = aes(x=x, y=y, z=z),
+                        breaks=c(-100),
+                        size=c(0.4),
+                        colour="darkgray", show.legend = FALSE) +
+  metR::geom_text_contour(data = bf_Sub, mapping = aes(x=x,y=y,z=z),
+                          breaks = c(-100), show.legend = FALSE, 
+                          size = 2.5, alpha = .8, nudge_y = -.002,
+                          color="lightgrey") +
+  ggplot2::geom_contour(data = bf_Sub,
+                        mapping = aes(x=x, y=y, z=z),
+                        breaks=c(-200),
+                        size=c(0.4),
+                        colour="darkgray", show.legend = FALSE) +
+  metR::geom_text_contour(data = bf_Sub, mapping = aes(x=x,y=y,z=z),
+                          breaks = c(-200), 
+                          label.placement = label_placement_n(5),
+                          show.legend = FALSE, size = 2.5, alpha = .8,
+                          nudge_y = -.002, color="lightgrey") +
+  geom_point(data = data_Sub, 
+             mapping = aes(Long,Lat, color=KrillDensity_MeanNonZero ),
+             size=5,shape=15, show.legend = TRUE, 
+             alpha = 1, fill="black") +
+  geom_label(data = lineSum[c(1,length(lineSum$ColumnID) ),],
+             mapping = aes(Long,Lat),label=c("Start","End"),
+             size=2.5,nudge_y = .02)+
+  scale_color_gradient(name = expression(atop(bold("Krill Density"),
+                                              bold(log[e](g/m^3)) )), 
+                       low="white",
+                       high="magenta",
+                       na.value = "white", 
+                       limits = c(0,4),
+                       breaks=seq(0,5,1),
+                       oob=scales::squish) +
+  geom_sf(data = world, size=1.25,fill="lightgrey",color="grey") +
+  coord_sf(xlim = c(min(d_Sub_Line$Long,na.rm = TRUE)-degreeBuffer,
+                    max(d_Sub_Line$Long,na.rm = TRUE)+degreeBuffer), 
+           ylim = c(min(d_Sub_Line$Lat,na.rm = TRUE)-0.35,
+                    max(d_Sub_Line$Lat,na.rm = TRUE)+0.35), 
+           expand = FALSE) +
+  theme_classic() +
+  annotation_scale(location = "br", width_hint = 0.5, text_face = "bold", text_col = "grey") + 
+  annotation_north_arrow(location = "br", 
+                         which_north = "true", 
+                         pad_x = unit(0.25, "in"), 
+                         pad_y = unit(0.25, "in"), 
+                         style = north_arrow_fancy_orienteering(line_col = "grey",
+                                                                fill = c("white", "black"),
+                                                                text_col = "grey"  ) ) + 
+  xlab("Longitude") + 
+  ylab("Latitude") + 
+  guides(color = guide_colourbar(order=1,direction = 'horizontal' ,
+                                 title.position = "top", 
+                                 title.hjust = .5,
+                                 label.position = "bottom"), 
+         fill = guide_colourbar(order=2,direction = 'horizontal', 
+                                title.position = "top", 
+                                title.hjust = .5,
+                                label.position = "bottom")) +
+  theme(panel.grid.major = element_line(color = gray(.5), 
+                                        linetype = "dashed", size = 0.5),
+        panel.background = element_rect(fill = "aliceblue"),
+        axis.text = element_text(face="bold", size=10),
+        axis.title = element_blank(),
+        legend.text = element_text(face="bold", size=10),
+        legend.position = c(.125,.2),
+        legend.box = 'vertical',
+        legend.title = element_text(face="bold", size=12),
+        legend.box.background = element_rect(color="white",
+                                             size=2.5, fill="white"),
+        legend.spacing.y = unit(0.025, "cm"),
+        # adds a buffer on the sides so the plot is centered
+        plot.margin=margin(t = 0.5, r = 1, b = 0, l = 0.25, "cm"), 
+        plot.title = element_text(face="bold", size=24, hjust = 0.5),
+        plot.subtitle = element_text(face="bold", size=20, hjust = 0.5))
+
+# 240 ####
+p240 <- ggplot()+
+  geom_sf(data = world,color=NA,fill=NA) +
+  geom_raster(data = FTLE_df240[complete.cases(FTLE_df240),], 
+              mapping = aes(x, y, fill = FTLE)) +
+  labs(x="", y="") +
+  scale_fill_gradientn(colors = viridis(option = "plasma", n = 40, 
+                                        alpha = ftle_alpha(40, 8, 8)),
+                       values = scales::rescale(
+                         c(0,as.numeric(qSumFTLE240$Means[1:9]))),
+                       limits=c(0, .6), 
+                       breaks = c(0,.3,.6),
+                       oob=scales::squish,
+                       na.value = NA,
+                       name = expression(atop( bold('FTLE (240 hr)'), 
+                                               bold(day^bold({bold("-1")})) )) ) +
+  # add 100m and 200m contours
+  ggplot2::geom_contour(data = bf_Sub,
+                        mapping = aes(x=x, y=y, z=z),
+                        breaks=c(-100),
+                        size=c(0.4),
+                        colour="darkgray", show.legend = FALSE) +
+  metR::geom_text_contour(data = bf_Sub, mapping = aes(x=x,y=y,z=z),
+                          breaks = c(-100), show.legend = FALSE, 
+                          size = 2.5, alpha = .8, nudge_y = -.002,
+                          color="lightgrey") +
+  ggplot2::geom_contour(data = bf_Sub,
+                        mapping = aes(x=x, y=y, z=z),
+                        breaks=c(-200),
+                        size=c(0.4),
+                        colour="darkgray", show.legend = FALSE) +
+  metR::geom_text_contour(data = bf_Sub, mapping = aes(x=x,y=y,z=z),
+                          breaks = c(-200), 
+                          label.placement = label_placement_n(5),
+                          show.legend = FALSE, size = 2.5, alpha = .8,
+                          nudge_y = -.002, color="lightgrey") +
+  geom_point(data = data_Sub, 
+             mapping = aes(Long,Lat, color=KrillDensity_MeanNonZero ),#
+             size=5,shape=15, show.legend = TRUE, 
+             alpha = 1, fill="black") +
+  geom_label(data = lineSum[c(1,length(lineSum$ColumnID) ),],
+             mapping = aes(Long,Lat),label=c("Start","End"),
+             size=2.5,nudge_y = .02)+
+  scale_color_gradient(name = expression(atop(bold("Krill Density"),
+                                              bold(log[e](g/m^3)) )), 
+                       low="white",
+                       high="magenta",
+                       na.value = "white", 
+                       limits = c(0,4),
+                       breaks=seq(0,5,1),
+                       oob=scales::squish) +
+  geom_sf(data = world, size=1.25,fill="lightgrey",color="grey") +
+  coord_sf(xlim = c(min(d_Sub_Line$Long,na.rm = TRUE)-degreeBuffer,
+                    max(d_Sub_Line$Long,na.rm = TRUE)+degreeBuffer), 
+           ylim = c(min(d_Sub_Line$Lat,na.rm = TRUE)-0.35,
+                    max(d_Sub_Line$Lat,na.rm = TRUE)+0.35), 
+           expand = FALSE) +
+  theme_classic() +
+  annotation_scale(location = "br", width_hint = 0.5, text_face = "bold", text_col = "grey") + 
+  annotation_north_arrow(location = "br", 
+                         which_north = "true", 
+                         pad_x = unit(0.25, "in"), 
+                         pad_y = unit(0.25, "in"), 
+                         style = north_arrow_fancy_orienteering(line_col = "grey",
+                                                                fill = c("white", "black"),
+                                                                text_col = "grey"  ) ) + 
+  xlab("Longitude") + 
+  ylab("Latitude") + 
+  guides(color = guide_colourbar(order=1,direction = 'horizontal' ,
+                                 title.position = "top", 
+                                 title.hjust = .5,
+                                 label.position = "bottom"), 
+         fill = guide_colourbar(order=2,direction = 'horizontal', 
+                                title.position = "top", 
+                                title.hjust = .5,
+                                label.position = "bottom")) +
+  theme(panel.grid.major = element_line(color = gray(.5), 
+                                        linetype = "dashed", size = 0.5),
+        panel.background = element_rect(fill = "aliceblue"),
+        axis.text = element_text(face="bold", size=10),
+        axis.title = element_blank(),
+        legend.text = element_text(face="bold", size=10),
+        legend.position = c(.125,.2),
+        legend.box = 'vertical',
+        legend.title = element_text(face="bold", size=12),
+        legend.box.background = element_rect(color="white",
+                                             size=2.5, fill="white"),#
+        legend.spacing.y = unit(0.025, "cm"),
+        # adds a buffer on the sides so the plot is centered
+        plot.margin=margin(t = 0.5, r = 1, b = 0, l = 0.25, "cm"), 
+        plot.title = element_text(face="bold", size=24, hjust = 0.5),
+        plot.subtitle = element_text(face="bold", size=20, hjust = 0.5))
+
+# Plot All ####
+pMapH <- ggarrange(p24,p48,p120,p240, 
+                   ncol=2, nrow = 2, 
+                   align = "hv")
+pMapH
+```
+ 
+FTLE data is in hourly increments (due to the temporal resolution of the HF Radar surface current measurements), and some survey transect lines spanned multiple FTLE measurement increments (mean = 3.02, 90% have 5 or less layers). To avoid introducing artificial jumps in measurement values at hourly changes, for this analysis we calculated a spatial mean of the FTLE layers for each line.  
+ 
+```{r acousticsFTLELayers, eval=FALSE, fig.height=11.7725, fig.width=14, message=FALSE, warning=FALSE, include=FALSE, paged.print=TRUE}
+  dataGamm %>% 
+    group_by(Cruise,Line) %>% 
+    summarize(numFTLELayers = first(lineMaxI)- first(lineMinI)+1) %>%
+    ungroup() %>% 
+    .$numFTLELayers %>% 
+    quantile(c(.5,.75,.90))
+  dataGamm %>% 
+    group_by(Cruise,Line) %>% 
+    summarize(numFTLELayers = first(lineMaxI)- first(lineMinI)+1) %>%
+    ungroup() %>% 
+    summarize(meanLayers = mean(numFTLELayers))
+```
+
+  
+## Krill
+
+Krill acoustic data from the ACCESS Cruises are summarized into 200m long x 5m deep cells. (Note: The first 5m are not analyzed, so the top of the most shallow cell in any column is 5m.) To match the spatial resolution of the FTLE data, we combine acoustic grid cells into 600m Columns and calculate several summary statistics of each column for analysis. These include:
+
+  - Maximum Krill Density (max in any cell within a column)
+  - Mean Density of Cells with Krill
+  - Geometric Mean Density of Cells with Krill (10^(mean(log10(Krill Density))))
+
+**Here we see the distribution of krill in relation the FTLE along the transect line for all 4 integration times.** 
+*Note: this is the same transect line shown in the figure above.*
+
+```{r acousticsPlot, echo=TRUE, fig.height=16, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+# Create  a plot showing the acoustics data and how they were processed 
+c = "ACC1207"
+l = "6"
+
+markerSize <- 5.5
+markerBump <- 0.021
+# Subset 600m resolution acoustics data for this cruise/line
+data_Sub <- dataGamm %>%
+  dplyr::filter(Cruise == c, Line == l) 
+# Subset CTD data for this cruise/line
+cast_Sub <- dataCTD %>%
+  dplyr::filter(Cruise == c, Line == l) 
+# Subset full resolution acoustics data for this cruise/line
+d_Sub_Line <- acoustics_DF_FTLE_W600 %>%
+  dplyr::filter(Cruise == c, Line == l)
+# Create a column summary for this line
+lineSum <- d_Sub_Line %>% 
+  mutate(minCID = min(as.integer(d_Sub_Line$ColumnID))) %>% 
+  group_by(ColumnID) %>% 
+  summarise(dttz = first(dttz),
+            Lat = first(Lat),
+            Long = first(Long),
+            ftle24=first(ftle24_L),
+            ftle48=first(ftle48_L),
+            ftle120=first(ftle120_L),
+            ftle240=first(ftle240_L),
+            botDepth = first(BotDepth),
+            KrillBiomass = sum(KrillBiomass),
+            numWith = sum(KrillBiomass>0),
+            density = if_else(numWith > 0, mean(KrillDensity[KrillDensity>0]),0),
+            logDensity = if_else(density==0, -8,log10(density)),
+            x = (as.integer(first(ColumnID))-first(minCID))*200)  
+#### Transect Plot #### 
+# Create a matrix of the vertical 
+x = matrix(nrow = (2+length(unique(as.integer(d_Sub_Line$CellID)))), 
+           ncol = length(unique(as.integer(d_Sub_Line$ColumnID))),
+           byrow=FALSE)
+for(ii in 1:length(unique(as.integer(d_Sub_Line$ColumnID)))){
+  numNA <- nrow(x)- (2+max(as.integer(d_Sub_Line$CellID[d_Sub_Line$ColumnID==unique(as.integer(d_Sub_Line$ColumnID))[ii]])))
+  if(numNA>0){
+    x[,ii] <- c(NA, NA, d_Sub_Line$KrillDensity[d_Sub_Line$ColumnID==unique(as.integer(d_Sub_Line$ColumnID))[ii]], rep(NA, numNA))
+  } else {
+    x[,ii] <- c(NA, NA, d_Sub_Line$KrillDensity[d_Sub_Line$ColumnID==unique(as.integer(d_Sub_Line$ColumnID))[ii]])
+  }
+}
+# Create a raster from transect values
+r <- raster(ncol=ncol(x),nrow=nrow(x))
+raster::values(r) <- x
+bb <- extent(0, (ncol(x)-1)*200,(nrow(x)-1)*-5, 0)
+extent(r) <- bb
+r <- setExtent(r, bb, keepres=TRUE)
+
+rSPDF <- as(r, "SpatialPixelsDataFrame")
+r_df <- as.data.frame(rSPDF)
+colnames(r_df) <- c("KrillDensity", "x", "y")
+r_df <- arrange(r_df, x, -y)
+# add x and y back onto d_sub_Line
+d_Sub_Line <- cbind(d_Sub_Line,x=r_df$x,y=r_df$y)
+
+d_sub600 <- d_Sub_Line %>% 
+  group_by(Col600) %>% 
+  summarize(minX = min(x)-100,
+            maxX= max(x)+100,
+            minY = min(y)+5, # adjust to represent the top of the column
+            maxY= 0,
+            Krill = if_else(sum(KrillBiomass)>0,1,0)) 
+
+cast_SubSum <- cast_Sub %>% 
+  mutate(x = c(0,4180,7763,28661))
+
+whaleCTD <- d_sub600 %>% 
+  left_join(dplyr::select(data_Sub,Col600, HUWH, BLWH), by = "Col600" )
+
+
+ylim.prim <- c(round(min(r_df$y))-10, 0)
+ylim.sec <- c(1000,0)   
+
+b <- diff(ylim.prim)/diff(ylim.sec)
+a <- ylim.prim[1] - b*ylim.sec[1] 
+
+# Main Plot
+
+p1 <- ggplot() +  
+  # geom_line(data= lineSum,aes(x=x,y=-botDepth),size=1.25)+
+  geom_rect(data=d_sub600, aes(xmin = minX, xmax = maxX, ymin = minY-2.5, ymax = -5,
+                               alpha="600m Columns"),color="black", fill="white") +
+  geom_rect(data=d_sub600, aes(xmin = minX, xmax = maxX, ymin = minY-2.5, ymax = -5,
+                               fill=as.factor(Krill)),color="black") +
+  scale_fill_manual(name = NULL, values = c("1"="#b3ffff","0"="white"),
+                    labels = c("Krill Present in Column", "No Krill in Column"),
+                    guide = guide_legend(order=3,direction = 'vertical') 
+                    )+
+  new_scale_fill() +   
+  geom_tile(data=r_df,aes(x=x, y=y+5,fill=log(KrillDensity)),color="darkgrey", alpha=0.95) + 
+  scale_fill_gradient(name = expression(atop(bold("Krill Density"),
+                                             bold(log[e](g/m^3)) )), 
+                      low="#FFCCFF",
+                      high="magenta",
+                      na.value = NA, 
+                      limits = c(-0.5,3),
+                      breaks=seq(0,3,1),
+                      oob=scales::squish) +
+  geom_rect(data=d_sub600, aes(xmin = minX, xmax = maxX, ymin = minY-2.5, ymax = -5,
+                               alpha="600m Columns"),color="black", fill=NA, size = 0.75) +
+  scale_alpha_manual(name=NULL, values=c("600m Columns"=0.1)) +
+  geom_point(data= whaleCTD[whaleCTD$HUWH == 1,], aes(y=1.5,x=minX+300, shape = "Humpback Whale Sighting"),
+             fill = "red", color="black", size=markerSize)+
+  geom_point(data= whaleCTD[whaleCTD$BLWH == 1,], aes(y=1.5,x=minX+300, shape = "Blue Whale Sighting"),
+             fill = "blue", color="black", size=markerSize)+
+  geom_point(data=cast_SubSum, aes(y=6,x=x, shape = "CTD Profile"),
+             fill = "black", color="black", size=markerSize)+
+  scale_shape_manual(name = NULL, values = c("Humpback Whale Sighting" = 24,
+                                          "Blue Whale Sighting" = 24,
+                                          "CTD Profile" = 25) )+
+  scale_y_continuous(limits=c(round(min(r_df$y))-5, 6), expand = c(0.025,0))+
+  scale_x_continuous(expand = c(0.0115,0.00005),limits=c(-1,(max(r_df$x))-800 )
+                     )+
+  xlab("Transect Distance (km)")+ ylab("Depth (m)")+
+  guides(
+         fill = guide_colourbar(order=1,direction = 'horizontal',title.position = "left", 
+                                title.hjust = .5,label.position = "bottom"),
+         alpha = guide_legend(order=2,direction = 'vertical'
+                              ),
+         shape = guide_legend(order=4,direction = 'vertical',
+                              override.aes = list(fill = c("red", "blue", "black"))  )) +
+  theme_classic()+
+  theme(legend.position= c(.85,.375),#"bottom",
+        legend.direction = "horizontal",#"
+        legend.title = element_text(face="bold", size=18),
+        legend.text = element_text(face="bold", size=16),
+        legend.key.size = unit(1, "cm"),
+        legend.spacing.y= unit(0.15, "cm"),
+        plot.title = element_text(face="bold", size=24,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=22,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        axis.title = element_text(face="bold", size=18),
+        axis.text = element_text(face="bold", size=16),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank()
+        )
+p2<- ggplot()+
+      geom_hline(yintercept=0, linetype = 'dashed', size=3,color="darkgrey")+
+      geom_line(data = lineSum,aes(x=x,y=ftle24,color="24 hr"),size=2)+
+      geom_line(data = lineSum,aes(x=x,y=ftle48,color="48 hr"),size=2)+
+      geom_line(data = lineSum,aes(x=x,y=ftle120,color="120 hr"),size=2)+
+      geom_line(data = lineSum,aes(x=x,y=ftle240,color="240 hr"),size=2)+
+      scale_color_manual(name= "Integration",breaks = c("24 hr", "48 hr", "120 hr","240 hr"),values = c("red", "black", "blue", "magenta"))+
+      xlab("Transect Distance (m)")+ ylab("FTLE")+
+      scale_x_continuous(expand = c(0,0))+
+      theme_classic()+
+      theme(legend.position="bottom",
+            legend.title = element_text(face="bold", size=22),
+            legend.text = element_text(face="bold", size=22),
+            legend.key.size = unit(2, "cm"),
+            plot.title = element_text(face="bold", size=24,hjust = 0.5),
+            plot.subtitle = element_text( face="bold", size=22,hjust = 0.5),
+            plot.caption = element_text( face="bold", size=18,hjust = 0),
+            axis.title = element_text(face="bold", size=22),
+            axis.text = element_text(face="bold", size=20),
+            axis.title.y.right = element_text(face="bold", size=18, color="grey"),
+            axis.text.y.right = element_text(face="bold", size=10, color="grey"))
+tP<-ggarrange(p1,p2,nrow=2,align = c("hv"), heights = c(.75,.25) )
+tP
+```
+
+
+```{r krillDensitybyDepth,echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE, paged.print=TRUE}
+ggplot()+
+  geom_density2d_filled(data=dataGamm,
+                  aes(x=KrillLayer_MeanDepth_Weighted,log10(KrillDensity_geoMeanNonZero),stat = "density_2d_filled"),show.legend = FALSE) +
+  ggtitle("Distribution of Geometric Mean Krill Density By Depth") +
+  theme_classic()+
+  xlab("Krill Layer Depth (m)") +
+  ylab("log10(Geometric Mean Krill Density)") +
+  theme(legend.position="bottom",
+            legend.title = element_text(face="bold", size=22),
+            legend.text = element_text(face="bold", size=22),
+            legend.key.size = unit(1, "cm"),
+            
+            plot.title = element_text(face="bold", size=24,hjust = 0.5),
+            plot.subtitle = element_text( face="bold", size=22,hjust = 0.5),
+            plot.caption = element_text( face="bold", size=18,hjust = 0),
+            axis.title = element_text(face="bold", size=22),
+            axis.text = element_text(face="bold", size=20),
+            axis.title.y.right = element_text(face="bold", size=18, color="grey"),
+            axis.text.y.right = element_text(face="bold", size=10, color="grey"))
+```
+
+```{r krillBiomass, eval=FALSE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE, paged.print=TRUE}
+dataGamm %>% group_by(Cruise,Line) %>% summarize(TotBioMass = sum(KrillBiomass)) %>% 
+  summarize(mean(TotBioMass),sd(TotBioMass))
+dataGamm %>% dplyr::filter(KrillDensity_geoMeanNonZero>0) %>% summarize(mean(KrillDensity_geoMeanNonZero),sd(KrillDensity_geoMeanNonZero))
+```
+
+
+## Cetacean Data
+
+In conjunction with the krill transect surveys, cetacean sightings were also recorded. Due to the nature of the transects, sightings were not investigated further (i.e. the ship did not break off the line to pursue groups of whales) resulting in a large number of unidentified whales. For this reason, we excluded outliers in distance from ship to reduce potential bias in location accuracy of sightings (i.e. > .5 nm from ship) and excluded sightings where the species could not be verified. Additionally, due to the low sample size of Gray, and Minke whales, they are excluded from our analysis. **80% of sightings were between 0 and 0.5 nm from the ship.**
+
+```{r distfromShip, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+cetacean_DF_FTLE  %>% 
+  dplyr::filter(Type == "ACC") %>% 
+  mutate(Distance = if_else(DisFrShipNm <= 0.5, "0-0.5 nm","0.5+ nm")) %>% 
+  group_by(SpCode, Distance) %>% 
+  summarise(NumSightings = n())
+```
+
+```{r distHist, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+ggplot()+
+  geom_histogram(data=cetacean_DF_FTLE ,aes(x=DisFrShipNm),bins=100)+
+  geom_vline(xintercept = 0.5, color='red',linetype=2,size=3)+
+  ggtitle("Sighting Distance from Ship")+
+  xlab("Distance (nm)")+
+  ylab("Number of Sightings") +
+  theme_minimal()+
+  theme(axis.title = element_text(face="bold", size=22),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=20,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=18,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=16,hjust = 1),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+
+```
+
+To examine the relationship between cetacean presence and FTLE, we joined the cetacean sighting data to the 600 meter columns used in the krill analysis (denoting cetacean presence for each species). Columns without cetacean sightings were labeled as absences, and we fitted a logistic regression using the presence/absence for each column as the response.
+
+```{r whalePresAbsMap, eval=FALSE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE, paged.print=TRUE}
+c = "ACC1207" # Cruise
+  data_Sub <- dataGamm %>%
+    dplyr::filter(Cruise == c) 
+    
+  ggplot() +
+      geom_sf(data = world) +
+      coord_sf(xlim = c(min(data_Sub$Long,na.rm = TRUE)-.15, max(data_Sub$Long,na.rm = TRUE)+.25),
+             ylim = c(min(data_Sub$Lat,na.rm = TRUE)-.15, max(data_Sub$Lat,na.rm = TRUE)+.15), expand = FALSE) +
+# add 200m contour
+  geom_contour(data = bf,
+               aes(x=x, y=y, z=z),
+               breaks=c(-100,-200,-400,-800,-1600),
+               size=c(0.4),
+               colour="darkgrey", show.legend = FALSE) +
+  geom_text_contour(data = bf, aes(x=x, y=y,z = z),breaks=c(-100,-200,-400,-800,-1600),
+                    show.legend = FALSE, size = 2.2, alpha = .6, nudge_y = -.002) +
+    geom_point(data= data_Sub, aes(y=Lat,x=Long,color="No Whales"),shape=21,size=3)+
+    geom_point(data= data_Sub[data_Sub$HUWH == 1,], aes(y=Lat,x=Long,color="Humpback Whale"),size=4)+
+    geom_point(data= data_Sub[data_Sub$BLWH == 1,], aes(y=Lat,x=Long,color="Blue Whale"),size=4)+
+    scale_color_manual(name=NULL, values = c("No Whales" = "grey",
+                                             "Humpback Whale" = "red",
+                                             "Blue Whale" = "blue")) +
+  annotation_scale(location = "bl", width_hint = 0.5) + 
+  xlab("Longitude") + 
+  ylab("Latitude") + 
+    guides(color = guide_legend(order=1, override.aes = list(size=6, stroke=2)))+
+  ggtitle("Whale Sightings",subtitle = "ACCESS Cruise 07-2012") +
+  theme(panel.grid.major = element_line(color = gray(.5), linetype = "dashed", size = 0.5), 
+        panel.background = element_rect(fill = "aliceblue"),
+        legend.key = element_blank(),
+        axis.text = element_text(face="bold", size=10),
+        axis.title = element_blank(),
+        legend.text = element_text(face="bold", size=13),
+        legend.position = c(.125,.2),
+        legend.box = 'vertical',
+        legend.key.size = unit(1, "cm"),
+        legend.title = element_text(face="bold", size=12),
+        legend.box.background = element_rect(color="white",
+                                             size=2.5, fill="white"),
+        plot.margin=margin(t = 0.5, r = 1, b = 0, l = 0.25, "cm"), 
+        plot.title = element_text(face="bold", size=24, hjust = 0.5),
+        plot.subtitle = element_text(face="bold", size=20, hjust = 0.5))
+```
+
+
+
+```{r cetaceanMap, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+cetacean_Sum <- cetacean_Sub %>% 
+  group_by(SpCode) %>% 
+  summarise(NumSightings = n())
+            
+ggplot()+
+  geom_sf(data = world) +
+  coord_sf(xlim = c(min(cetacean_Sub$SightLong,na.rm = TRUE)-.15,
+                    max(cetacean_Sub$SightLong,na.rm = TRUE)+.15),
+           ylim = c(min(cetacean_Sub$SightLat,na.rm = TRUE)-.15,
+                    max(cetacean_Sub$SightLat,na.rm = TRUE)+.15), expand = FALSE) +
+  # add 200m contour
+  geom_contour(data = bf,
+               aes(x=x, y=y, z=z),
+               breaks=c(-100,-200,-400,-800,-1600),
+               size=c(0.4),
+               colour="darkgrey", show.legend = FALSE) +
+  geom_text_contour(data = bf, aes(x=x, y=y,z = z),breaks=c(-100,-200,-400,-800,-1600),
+                    show.legend = FALSE, size = 2.2, alpha = .6, nudge_y = -.002) +
+  geom_point(data=cetacean_Sub, aes(x=SightLong,y=SightLat,color=SpCode, group=SpCode),size=2) +
+  geom_text(data=cetacean_Sum, aes( label = paste0("n = ", NumSightings, " Sightings"), group=SpCode ), x=-122.7,y=38.4)+
+  scale_color_manual(name= "Species", values=c("BLWH"="blue", "HUWH"= "red"),labels=c("BLWH"="Blue Whales", "HUWH"="Humpback Whales") ) +
+  annotation_scale(location = "bl", width_hint = 0.5) + 
+  xlab("Longitude") + 
+  ylab("Latitude") + 
+  ggtitle("Sighting Locations",subtitle = "by Species") +
+  theme(panel.grid.major = element_line(color = gray(.5), linetype = "dashed", size = 0.5), 
+        panel.background = element_rect(fill = "aliceblue"),
+        strip.background = element_blank(),
+  strip.text.x = element_blank()) + 
+  facet_grid(~SpCode)
+```
+
+## Oceanographic Data
+
+In-situ oceanographic observations were recorded from periodic CTD casts along the krill transect lines. Because the CTD casts were not continuous and were spread out over several nautical miles, we analyzed them separately from the krill data. We extracted the FTLE for the specific time/location of the CTD cast, and calculated several summary metrics from the casts for analysis (Density at 0, 10 20, 30, 40 and 50 meters). To allow for comparability across samples, we excluded CTD casts with a maximum cast depth of less than 50 meters.
+
+```{r castLocations, fig.height=12, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+  castSummary_FTLE %>% 
+  mutate(keep = if_else(maxDepth>=50,">= 50 meters","Excluded")) %>% 
+     ggplot() +
+    geom_sf(data = world) +
+    coord_sf(xlim = c(min(dataCTD$Long,na.rm = TRUE)-.15, max(dataCTD$Long,na.rm = TRUE)+.25),
+             ylim = c(min(dataCTD$Lat,na.rm = TRUE)-.15, max(dataCTD$Lat,na.rm = TRUE)+.15), expand = FALSE) +
+# add 200m contour
+  geom_contour(data = bf,
+               aes(x=x, y=y, z=z),
+               breaks=c(-100,-200,-400,-800,-1600),
+               # breaks=c(-200),
+               size=c(0.4),
+               colour="darkgrey", show.legend = FALSE) +
+  geom_text_contour(data = bf, aes(x=x, y=y,z = z),breaks=c(-100,-200,-400,-800,-1600),
+                    show.legend = FALSE, size = 2.2, alpha = .6, nudge_y = -.002) +
+    geom_point(aes(y=Lat,x=Long,color=keep),size=3)+
+    geom_text(  label = paste0("n = ", length(dataCTD$ID_Date), " CTD Casts"), x=-122.7,y=38.4,size=8)+
+  scale_color_manual(name=NULL, values = c(">= 50 meters" = "black","Excluded" = "red" ))+
+  annotation_scale(location = "bl", width_hint = 0.5) + 
+  xlab("Longitude") + 
+  ylab("Latitude") + 
+  ggtitle("CTD Cast Locations") +
+  theme(panel.grid.major = element_line(color = gray(.5), linetype = "dashed", size = 0.5), 
+        panel.background = element_rect(fill = "aliceblue"),
+        legend.key = element_blank(),
+        axis.text = element_text(face="bold", size=14),
+        axis.title = element_blank(),
+        legend.text = element_text(face="bold", size=13),
+        legend.position = c(.78,.72),
+        legend.box = 'vertical',
+        legend.key.size = unit(1, "cm"),
+        legend.title = element_text(face="bold", size=12),
+        legend.box.background = element_rect(color="black",
+                                             size=2.5, fill="white"),
+        plot.margin=margin(t = 0.5, r = 1, b = 0, l = 0.25, "cm"), 
+        plot.title = element_text(face="bold", size=24, hjust = 0.5),
+        plot.subtitle = element_text(face="bold", size=20, hjust = 0.5))
+```
+
+
+# Analysis
+
+## Oceanographic Expression of FTLE Features
+
+### 1. Do surface FTLE features correspond to density differences and if so, to what depth?
+
+#### GLMM (Seawater Density ~ FTLE)
+We examined seawater density (Sigma-T) for depths between the surface and 50 meters (at 10 meter increments). Sigma-T	(units of kg/m^3) is an estimate of the potential density of seawater, minus 1000 kg/m^3.
+
+*Overall, we found a significant relationship between Seawater Density and FTLE at both the surface and at 10 meters for the 120 hour integration window, and while not significant, the slopes for all other integration windows were positive for the surface and 10 meter depths.* 
+
+*The relationship changes as depth increases beyond 10 meters. For depths of 20-50 meters, the coefficients for the 24 and 48 hour integration windows are negative and the relationship is significant for the 24 hour window. For the 120 and 240 hour integration windows, the coefficients are all positive though not significant, and follow a pattern diminishing slope estimate with increasing depth.*  
+
+*Slopes for all depths followed a similar shape, generally increasing with increasing integration times with a peak at 120-hours and a slight decrease for the 240 hour integration window. Seawater density (Sigma Theta) is comprised of both a temperature and salinity component. These results may indicate colder/denser parcels are found at FTLE features in our study region.*
+
+##### Density at Surface
+
+```{r ssSigmaTGLMM, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+## 24
+ssSigmaT_GLMM24 <- glmer(SigmaTheta0m ~ ftle24 +
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle24),
+                                                            !is.na(SigmaTheta0m))) 
+anovassSigmaT_GLMM24 <- car::Anova(ssSigmaT_GLMM24, type=2)
+## 48
+ssSigmaT_GLMM48 <- glmer(SigmaTheta0m ~ ftle48 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle48),
+                                                            !is.na(SigmaTheta0m))) 
+anovassSigmaT_GLMM48 <- car::Anova(ssSigmaT_GLMM48, type=2)
+## 120
+ssSigmaT_GLMM120 <- glmer(SigmaTheta0m ~ ftle120 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle120),
+                                                            !is.na(SigmaTheta0m)))  
+anovassSigmaT_GLMM120 <- car::Anova(ssSigmaT_GLMM120, type=2)
+## 240
+ssSigmaT_GLMM240 <- glmer(SigmaTheta0m ~ ftle240 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle240),
+                                                            !is.na(SigmaTheta0m)))  
+anovassSigmaT_GLMM240 <- car::Anova(ssSigmaT_GLMM240, type=2)
+
+tssSigmaT_GLMM <- data.frame(Model = c(rep("GLMM Sea Surface Sigma Theta",4) ),
+                       FTLE_Integration = c("24","48","120", "240"),
+                       Slope = c(round(ssSigmaT_GLMM24@beta[2],4),
+                                 round(ssSigmaT_GLMM48@beta[2],4),
+                                 round(ssSigmaT_GLMM120@beta[2],4),
+                                 round(ssSigmaT_GLMM240@beta[2],4)
+                                 ),
+                       Intercept = c(round(ssSigmaT_GLMM24@beta[1],4),
+                                     round(ssSigmaT_GLMM48@beta[1],4),
+                                     round(ssSigmaT_GLMM120@beta[1],4),
+                                     round(ssSigmaT_GLMM240@beta[1],4)
+                                 ),
+                       pValue = c(round(anovassSigmaT_GLMM24$`Pr(>Chisq)`,5),
+                                  round(anovassSigmaT_GLMM48$`Pr(>Chisq)`,5),
+                                  round(anovassSigmaT_GLMM120$`Pr(>Chisq)`,5),
+                                  round(anovassSigmaT_GLMM240$`Pr(>Chisq)`,5)
+                                  )
+)
+tssSigmaT_GLMM
+```
+
+```{r modelOutssSigmaT_, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+plot_models(ssSigmaT_GLMM24,ssSigmaT_GLMM48,ssSigmaT_GLMM120,ssSigmaT_GLMM240,
+           vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, show.legend = FALSE,
+           dot.size = 4, value.size = 12, line.size = 1.25,
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("GLMM Results", subtitle = "Sea Surface SigmaTheta ~ FTLE")+
+  scale_color_manual(values=c("#440154FF",    
+                             "#31688EFF",  
+                            "#35B779FF",
+                            "#FDE725FF"
+                            ) 
+                   ) +
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+```{r model_ssSigmaT__diagPlots, eval=FALSE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE, results='hold'}
+plot_model(ssSigmaT_GLMM120, type="diag")
+plot_model(ssSigmaT_GLMM120, type="eff")
+acf(residuals(ssSigmaT_GLMM120))
+plot_model(ssSigmaT_GLMM120, type="re") 
+```
+
+##### Density at 10 meters
+
+```{r ctdD10TGLMM, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+## 24
+D10_GLMM24 <- glmer(SigmaTheta10m ~ ftle24 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle24),
+                                                            !is.na(SigmaTheta10m)))  
+anovaD10_GLMM24 <- car::Anova(D10_GLMM24, type=2)
+## 48
+D10_GLMM48 <- glmer(SigmaTheta10m ~ ftle48 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle48),
+                                                            !is.na(SigmaTheta10m)))  
+anovaD10_GLMM48 <- car::Anova(D10_GLMM48, type=2)
+## 120
+D10_GLMM120 <- glmer(SigmaTheta10m ~ ftle120 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle120),
+                                                            !is.na(SigmaTheta10m)))  
+anovaD10_GLMM120 <- car::Anova(D10_GLMM120, type=2)
+## 240
+D10_GLMM240 <- glmer(SigmaTheta10m ~ ftle240 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle240),
+                                                            !is.na(SigmaTheta10m)))  
+anovaD10_GLMM240 <- car::Anova(D10_GLMM240, type=2)
+
+tD10_GLMM <- data.frame(Model = c(rep("GLMM Sigma Theta at 10 meters",4) ),
+                       FTLE_Integration = c("24","48","120", "240"),
+                       Slope = c(round(D10_GLMM24@beta[2],4),
+                                 round(D10_GLMM48@beta[2],4),
+                                 round(D10_GLMM120@beta[2],4),
+                                 round(D10_GLMM240@beta[2],4)
+                                 ),
+                       Intercept = c(round(D10_GLMM24@beta[1],4),
+                                     round(D10_GLMM48@beta[1],4),
+                                     round(D10_GLMM120@beta[1],4),
+                                     round(D10_GLMM240@beta[1],4)
+                                 ),
+                       pValue = c(round(anovaD10_GLMM24$`Pr(>Chisq)`,5),
+                                  round(anovaD10_GLMM48$`Pr(>Chisq)`,5),
+                                  round(anovaD10_GLMM120$`Pr(>Chisq)`,5),
+                                  round(anovaD10_GLMM240$`Pr(>Chisq)`,5)
+                                  )
+)
+tD10_GLMM
+```
+
+
+```{r modelOutctdD10, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+plot_models(D10_GLMM24,D10_GLMM48,D10_GLMM120,D10_GLMM240,
+           vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, show.legend = FALSE,
+           dot.size = 4, value.size = 12, line.size = 1.25,
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("GLMM Results", subtitle = "SigmaTheta10m ~ FTLE")+
+    scale_color_manual(values=c("#440154FF",    
+                               "#31688EFF",  
+                              "#35B779FF",
+                              "#FDE725FF"
+                              ) 
+                     ) +
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+
+```{r d10ACF_Check, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+acf(residuals(D10_GLMM120  ))
+```
+
+##### Density at 20 meters
+
+```{r ctdD20TGLMM, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+## 24
+D20_GLMM24 <- glmer(SigmaTheta20m ~ ftle24 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle24),
+                                                            !is.na(SigmaTheta20m)))  
+anovaD20_GLMM24 <- car::Anova(D20_GLMM24, type=2)
+## 48
+D20_GLMM48 <- glmer(SigmaTheta20m ~ ftle48 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle48),
+                                                            !is.na(SigmaTheta20m)))  
+anovaD20_GLMM48 <- car::Anova(D20_GLMM48, type=2)
+## 120
+D20_GLMM120 <- glmer(SigmaTheta20m ~ ftle120 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle120),
+                                                            !is.na(SigmaTheta20m)))  
+anovaD20_GLMM120 <- car::Anova(D20_GLMM120, type=2)
+## 240
+D20_GLMM240 <- glmer(SigmaTheta20m ~ ftle240 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle240),
+                                                            !is.na(SigmaTheta20m)))  
+anovaD20_GLMM240 <- car::Anova(D20_GLMM240, type=2)
+
+tD20_GLMM <- data.frame(Model = c(rep("GLMM Sigma Theta at 20 meters",4) ),
+                       FTLE_Integration = c("24","48","120", "240"),
+                       Slope = c(round(D20_GLMM24@beta[2],4),
+                                 round(D20_GLMM48@beta[2],4),
+                                 round(D20_GLMM120@beta[2],4),
+                                 round(D20_GLMM240@beta[2],4)
+                                 ),
+                       Intercept = c(round(D20_GLMM24@beta[1],4),
+                                     round(D20_GLMM48@beta[1],4),
+                                     round(D20_GLMM120@beta[1],4),
+                                     round(D20_GLMM240@beta[1],4)
+                                 ),
+                       pValue = c(round(anovaD20_GLMM24$`Pr(>Chisq)`,5),
+                                  round(anovaD20_GLMM48$`Pr(>Chisq)`,5),
+                                  round(anovaD20_GLMM120$`Pr(>Chisq)`,5),
+                                  round(anovaD20_GLMM240$`Pr(>Chisq)`,5)
+                                  )
+)
+tD20_GLMM
+```
+
+```{r modelOutctdD20, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+plot_models(D20_GLMM24,D20_GLMM48,D20_GLMM120,D20_GLMM240,
+           vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, show.legend = FALSE,
+           dot.size = 4, value.size = 12, line.size = 1.25,
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("GLMM Results", subtitle = "SigmaTheta20m ~ FTLE")+
+    scale_color_manual(values=c("#440154FF",    
+                               "#31688EFF",  
+                              "#35B779FF",
+                              "#FDE725FF"
+                              ) 
+                     ) +
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+
+```{r d20ACF_Check, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+acf(residuals(D20_GLMM120  ))
+```
+
+##### Density at 30 meters
+
+```{r ctdD30TGLMM, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+## 24
+D30_GLMM24 <- glmer(SigmaTheta30m ~ ftle24 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle24),
+                                                            !is.na(SigmaTheta30m)))  
+anovaD30_GLMM24 <- car::Anova(D30_GLMM24, type=2)
+## 48
+D30_GLMM48 <- glmer(SigmaTheta30m ~ ftle48 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle48),
+                                                            !is.na(SigmaTheta30m))) 
+anovaD30_GLMM48 <- car::Anova(D30_GLMM48, type=2)
+## 120
+D30_GLMM120 <- glmer(SigmaTheta30m ~ ftle120 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle120),
+                                                            !is.na(SigmaTheta30m))) 
+anovaD30_GLMM120 <- car::Anova(D30_GLMM120, type=2)
+## 240
+D30_GLMM240 <- glmer(SigmaTheta30m ~ ftle240 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle240),
+                                                            !is.na(SigmaTheta30m))) 
+anovaD30_GLMM240 <- car::Anova(D30_GLMM240, type=2)
+
+tD30_GLMM <- data.frame(Model = c(rep("GLMM Sigma Theta at 30 meters",4) ),
+                       FTLE_Integration = c("24","48","120", "240"),
+                       Slope = c(round(D30_GLMM24@beta[2],4),
+                                 round(D30_GLMM48@beta[2],4),
+                                 round(D30_GLMM120@beta[2],4),
+                                 round(D30_GLMM240@beta[2],4)
+                                 ),
+                       Intercept = c(round(D30_GLMM24@beta[1],4),
+                                     round(D30_GLMM48@beta[1],4),
+                                     round(D30_GLMM120@beta[1],4),
+                                     round(D30_GLMM240@beta[1],4)
+                                 ),
+                       pValue = c(round(anovaD30_GLMM24$`Pr(>Chisq)`,5),
+                                  round(anovaD30_GLMM48$`Pr(>Chisq)`,5),
+                                  round(anovaD30_GLMM120$`Pr(>Chisq)`,5),
+                                  round(anovaD30_GLMM240$`Pr(>Chisq)`,5)
+                                  )
+)
+tD30_GLMM
+```
+
+```{r modelOutctdD30, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+plot_models(D30_GLMM24,D30_GLMM48,D30_GLMM120,D30_GLMM240,
+           vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, show.legend = FALSE,
+           dot.size = 4, value.size = 12, line.size = 1.25,
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("GLMM Results", subtitle = "SigmaTheta30m ~ FTLE")+
+    scale_color_manual(values=c("#440154FF",    
+                               "#31688EFF",  
+                              "#35B779FF",
+                              "#FDE725FF"
+                              ) 
+                     ) +
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+
+```{r d30ACF_Check, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+acf(residuals(D30_GLMM120  ))
+```
+
+##### Density at 40 meters
+
+```{r ctdD40TGLMM, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+## 24
+D40_GLMM24 <- glmer(SigmaTheta40m ~ ftle24 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle24),
+                                                            !is.na(SigmaTheta40m)))
+anovaD40_GLMM24 <- car::Anova(D40_GLMM24, type=2)
+## 48
+D40_GLMM48 <- glmer(SigmaTheta40m ~ ftle48 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle48),
+                                                            !is.na(SigmaTheta40m))) 
+anovaD40_GLMM48 <- car::Anova(D40_GLMM48, type=2)
+## 120
+D40_GLMM120 <- glmer(SigmaTheta40m ~ ftle120 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle120),
+                                                            !is.na(SigmaTheta40m))) 
+anovaD40_GLMM120 <- car::Anova(D40_GLMM120, type=2)
+## 240
+D40_GLMM240 <- glmer(SigmaTheta40m ~ ftle240 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle240),
+                                                            !is.na(SigmaTheta40m))) 
+anovaD40_GLMM240 <- car::Anova(D40_GLMM240, type=2)
+
+tD40_GLMM <- data.frame(Model = c(rep("GLMM Sigma Theta at 40 meters",4) ),
+                       FTLE_Integration = c("24","48","120", "240"),
+                       Slope = c(round(D40_GLMM24@beta[2],4),
+                                 round(D40_GLMM48@beta[2],4),
+                                 round(D40_GLMM120@beta[2],4),
+                                 round(D40_GLMM240@beta[2],4)
+                                 ),
+                       Intercept = c(round(D40_GLMM24@beta[1],4),
+                                     round(D40_GLMM48@beta[1],4),
+                                     round(D40_GLMM120@beta[1],4),
+                                     round(D40_GLMM240@beta[1],4)
+                                 ),
+                       pValue = c(round(anovaD40_GLMM24$`Pr(>Chisq)`,5),
+                                  round(anovaD40_GLMM48$`Pr(>Chisq)`,5),
+                                  round(anovaD40_GLMM120$`Pr(>Chisq)`,5),
+                                  round(anovaD40_GLMM240$`Pr(>Chisq)`,5)
+                                  )
+)
+tD40_GLMM
+```
+
+```{r modelOutctdD40, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+plot_models(D40_GLMM24,D40_GLMM48,D40_GLMM120,D40_GLMM240,
+           vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, show.legend = FALSE,
+           dot.size = 4, value.size = 12, line.size = 1.25,
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("GLMM Results", subtitle = "SigmaTheta40m ~ FTLE")+
+    scale_color_manual(values=c("#440154FF",    
+                               "#31688EFF",  
+                              "#35B779FF",
+                              "#FDE725FF"
+                              ) 
+                     ) +
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+
+```{r d40ACF_Check, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+acf(residuals(D40_GLMM120  ))
+```
+
+##### Density at 50 meters
+
+```{r ctdD50TGLMM, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+## 24
+D50_GLMM24 <- glmer(SigmaTheta50m ~ ftle24 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle24),
+                                                            !is.na(SigmaTheta50m)))
+anovaD50_GLMM24 <- car::Anova(D50_GLMM24, type=2)
+## 48
+D50_GLMM48 <- glmer(SigmaTheta50m ~ ftle48 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle48),
+                                                            !is.na(SigmaTheta50m))) 
+anovaD50_GLMM48 <- car::Anova(D50_GLMM48, type=2)
+## 120
+D50_GLMM120 <- glmer(SigmaTheta50m ~ ftle120 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle120),
+                                                            !is.na(SigmaTheta50m))) 
+anovaD50_GLMM120 <- car::Anova(D50_GLMM120, type=2)
+## 240
+D50_GLMM240 <- glmer(SigmaTheta50m ~ ftle240 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle240),
+                                                            !is.na(SigmaTheta50m))) 
+anovaD50_GLMM240 <- car::Anova(D50_GLMM240, type=2)
+
+tD50_GLMM <- data.frame(Model = c(rep("GLMM Sigma Theta at 50 meters",4) ),
+                       FTLE_Integration = c("24","48","120", "240"),
+                       Slope = c(round(D50_GLMM24@beta[2],4),
+                                 round(D50_GLMM48@beta[2],4),
+                                 round(D50_GLMM120@beta[2],4),
+                                 round(D50_GLMM240@beta[2],4)
+                                 ),
+                       Intercept = c(round(D50_GLMM24@beta[1],4),
+                                     round(D50_GLMM48@beta[1],4),
+                                     round(D50_GLMM120@beta[1],4),
+                                     round(D50_GLMM240@beta[1],4)
+                                 ),
+                       pValue = c(round(anovaD50_GLMM24$`Pr(>Chisq)`,5),
+                                  round(anovaD50_GLMM48$`Pr(>Chisq)`,5),
+                                  round(anovaD50_GLMM120$`Pr(>Chisq)`,5),
+                                  round(anovaD50_GLMM240$`Pr(>Chisq)`,5)
+                                  )
+)
+tD50_GLMM
+```
+
+```{r modelOutctdD50, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+plot_models(D50_GLMM24,D50_GLMM48,D50_GLMM120,D50_GLMM240,
+           vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, show.legend = FALSE,
+           dot.size = 4, value.size = 12, line.size = 1.25, 
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("GLMM Results", subtitle = "SigmaTheta50m ~ FTLE")+
+    scale_color_manual(values=c("#440154FF",    
+                               "#31688EFF",  
+                              "#35B779FF",
+                              "#FDE725FF"
+                              ) 
+                     ) +
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+
+```{r d50ACF_Check, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+acf(residuals(D50_GLMM120  ))
+```
+
+##### Supplemental Figure 1
+
+```{r p_CTDdensityGLMM_All, fig.height=12, fig.width=12, message=FALSE, warning=FALSE}
+   p_ctdDensityAllv2 <- plot_models(D50_GLMM24,D50_GLMM48,
+                                 D50_GLMM120,D50_GLMM240,
+                                 D40_GLMM24,D40_GLMM48,
+                                 D40_GLMM120,D40_GLMM240,
+                                 D30_GLMM24,D30_GLMM48,
+                                 D30_GLMM120,D30_GLMM240,
+                                 D20_GLMM24,D20_GLMM48,
+                                 D20_GLMM120,D20_GLMM240,
+                                 D10_GLMM24,D10_GLMM48,
+                                 D10_GLMM120,D10_GLMM240, 
+                                 ssSigmaT_GLMM24,ssSigmaT_GLMM48,
+                                 ssSigmaT_GLMM120,ssSigmaT_GLMM240,
+                                 vline.color = "red",show.p=TRUE,show.values=TRUE, spacing = 0.925, 
+                                 show.legend = TRUE, dot.size = 4.5, value.size = 6, line.size = 1.2,
+                                 axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) +
+    scale_y_continuous(breaks=c(-0.4,0,0.4,0.8), limits = c(-0.4,1.4)) +
+    # ggtitle("Water Density (SigmaT) ~ FTLE")+
+    theme_minimal() +
+    theme(axis.title = element_text(face="bold", size=22),
+          axis.text = element_text( face="bold", size=22),
+          plot.title = element_text(face="bold", size=25,hjust = 0.5),
+          plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+          plot.caption = element_text( face="bold", size=12,hjust = 0),
+          legend.position = c(0.785,0.5),
+          legend.direction = "vertical",
+          legend.key.size = unit(0.8,"cm"),
+          legend.background = element_rect(fill="white",color="black"),
+          legend.text = element_text(face="bold", size=20),
+          legend.title = element_text(face="bold", size=22, hjust = 0.5))
+  
+  
+  p_ctdDensityAllv2$guides$colour$title <- "Response Variable"
+  p_ctdDensityAllv2$data$group <- factor(x = c(rep("Density at 50 meters",4), rep("Density at 40 meters",4), rep("Density at 30 meters",4), rep("Density at 20 meters",4), rep("Density at 10 meters",4), rep("Density at Surface",4)), levels = c("Density at 50 meters","Density at 40 meters","Density at 30 meters",  "Density at 20 meters","Density at 10 meters", "Density at Surface") )
+  p_ctdDensityAllv2 <- p_ctdDensityAllv2 + 
+    scale_color_manual(values=c("Density at 50 meters" =  "#0B775E",
+                                "Density at 40 meters" =  "#35B779FF",
+                                "Density at 30 meters" =  "#46ACC8",
+                                "Density at 20 meters" =  "#7294D4",
+                                "Density at 10 meters" =  "#31688EFF",
+                                "Density at Surface" =  "#440154FF"
+    ) 
+    )
+  p_ctdDensityAllv2
+```
+
+##### Figure 3A
+
+```{r p_densityCTD_GLMER, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+testSetp_CTD24 <- data.frame(ftle24 = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in Response scale
+testSetp_CTD24$fit <- predict(D10_GLMM24,newdata = testSetp_CTD24, 
+                              type = "response", re.form=~0,se.fit = TRUE)
+# Calculate the standard errors of the predicted values
+X24 <- model.matrix(~ ftle24, testSetp_CTD24)
+#calculate the covariance matrix of the model
+V24 <- vcov(D10_GLMM24, full = TRUE) 
+# take the square root of the diagonal elements to obtain the standard errors
+se24 <- sqrt(diag(X24 %*% V24 %*% t(X24))) 
+# Convert the Log Standard errors into the Response scale
+testSetp_CTD24$lwr <- testSetp_CTD24$fit - 1.96 * se24
+testSetp_CTD24$upr <- testSetp_CTD24$fit + 1.96 * se24
+testSetp_CTD24$model <- "24 hrs"
+
+testSetp_CTD48 <- data.frame(ftle48 = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in Response scale
+testSetp_CTD48$fit <- predict(D10_GLMM48,newdata = testSetp_CTD48, 
+                              type = "response", re.form=~0,se.fit = TRUE)
+# Calculate the standard errors of the predicted values
+X48 <- model.matrix(~ ftle48, testSetp_CTD48)
+#calculate the covariance matrix of the model
+V48 <- vcov(D10_GLMM48, full = TRUE) 
+# take the square root of the diagonal elements to obtain the standard errors
+se48 <- sqrt(diag(X48 %*% V48 %*% t(X48))) 
+# Convert the Log Standard errors into the Response scale
+testSetp_CTD48$lwr <- testSetp_CTD48$fit - 1.96 * se48
+testSetp_CTD48$upr <- testSetp_CTD48$fit + 1.96 * se48
+testSetp_CTD48$model <- "48 hrs"
+
+testSetp_CTD120 <- data.frame(ftle120 = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in Response scale
+testSetp_CTD120$fit <- predict(D10_GLMM120, newdata = testSetp_CTD120,
+                               type = "response", re.form=~0,se.fit = TRUE)
+# Calculate the standard errors of the predicted values
+X120 <- model.matrix(~ ftle120, testSetp_CTD120)
+#calculate the covariance matrix of the model
+V120 <- vcov(D10_GLMM120, full = TRUE) 
+# take the square root of the diagonal elements to obtain the standard errors
+se120 <- sqrt(diag(X120 %*% V120 %*% t(X120)))
+# Convert the Log Standard errors into the Response scale
+testSetp_CTD120$lwr <- testSetp_CTD120$fit - 1.96 * se120
+testSetp_CTD120$upr <- testSetp_CTD120$fit + 1.96 * se120
+testSetp_CTD120$model <- "120 hrs"
+
+testSetp_CTD240 <- data.frame(ftle240 = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in Response scale
+testSetp_CTD240$fit <- predict(D10_GLMM240,newdata = testSetp_CTD240, 
+                               type = "response", re.form=~0,se.fit = TRUE)
+# Calculate the standard errors of the predicted values
+X240 <- model.matrix(~ ftle240, testSetp_CTD240)
+#calculate the covariance matrix of the model
+V240 <- vcov(D10_GLMM240, full = TRUE) 
+# take the square root of the diagonal elements to obtain the standard errors
+se240 <- sqrt(diag(X240 %*% V240 %*% t(X240))) 
+
+# Convert the Log Standard errors into the Response scale
+testSetp_CTD240$lwr <- testSetp_CTD240$fit - 1.96 * se240
+testSetp_CTD240$upr <- testSetp_CTD240$fit + 1.96 * se240
+testSetp_CTD240$model <- "240 hrs"
+
+ggplot() + 
+  geom_ribbon(data=testSetp_CTD240,aes(x=ftle240,ymin = lwr, ymax = upr, 
+                                       color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSetp_CTD240,aes(x=ftle240,y = fit, color=model), 
+            size = 2, linetype=2)+
+  geom_ribbon(data=testSetp_CTD48,aes(x=ftle48,ymin = lwr, ymax = upr, 
+                                      color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSetp_CTD48,aes(x=ftle48,y = fit, color=model), 
+            size = 2, linetype=2)+
+  geom_ribbon(data=testSetp_CTD24,aes(x=ftle24,ymin = lwr, ymax = upr, 
+                                      color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSetp_CTD24,aes(x=ftle24,y = fit, color=model),
+            size = 2, linetype=2)+
+  geom_ribbon(data=testSetp_CTD120,aes(x=ftle120,ymin = lwr, ymax = upr, 
+                                       color = NULL,fill=model), alpha = .15) +  
+  geom_line(data=testSetp_CTD120,aes(x=ftle120,y = fit, color=model), 
+            size = 2, linetype=1)+
+  scale_color_manual(name= "FTLE\nIntegration",
+                       breaks=c("24 hrs","48 hrs","120 hrs","240 hrs"),
+                       values=c( "24 hrs" =     "#FDE725FF",   
+                               "48 hrs" = "#35B779FF",
+                               "120 hrs" =  "#31688EFF",
+                               "240 hrs" = "#440154FF"
+                               )) +
+  scale_fill_manual(name= "FTLE\nIntegration",
+                      breaks=c("24 hrs","48 hrs","120 hrs","240 hrs"),
+                       values=c( "24 hrs" =     "#FDE725FF",   
+                               "48 hrs" = "#35B779FF",
+                               "120 hrs" =  "#31688EFF",
+                               "240 hrs" = "#440154FF"
+                               )) +
+
+  
+  scale_x_continuous(breaks=seq(-1.5,2,.5),limits=c(-1.75,1.76), expand = c(0.005, 0.025))+
+  scale_y_continuous(limits=c(24,26.5), 
+                       expand = c(0.005, 0.005)) +
+  ylab(expression( bold(Potential~Density~(kg/~m^{bold("3")})))) +    #Potential Density (kg/m^3)
+  xlab(expression( bold(FTLE~(day^bold({bold("-1")})))) )+  
+  guides(fill = guide_legend(order=1,override.aes = list(alpla=0.05)),
+         color = guide_legend(order=1,override.aes = list(alpla=1)))+
+  labs(caption = "Dashed lines indicate p-values > .05") + 
+  ggtitle("Seawater Density (at 10 meters) ~ FTLE") +
+  theme_pubclean()+
+  theme(axis.title = element_text(face="bold", size=30),
+        axis.text = element_text( face="bold", size=28),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=18,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=14,hjust = 0),
+        legend.position="right",
+        legend.text = element_text(face="bold", size=28),
+        legend.title = element_text(face="bold", size=30),
+        legend.key.size = unit(2,"cm"),
+        strip.text.x = element_text(size = 22, face="bold"))
+```
+
+#### GLMM (Depth of Sigma Theta ~ FTLE)
+
+To further explore the depth of influence of aggregative surface current features, we also fit a linear regression with the depth of potential seawater density (sigma-theta) at 25, 25.5 and 26 kg/m3 as the response variable. 
+
+*Our analysis of the relationship between FTLE and the depth of specific values of potential sweater density supported the findings above (see Supplemental Figure 2). For example, the depth of the 25.5 kg/m^3 isopycnal had a significant negative relationship with FTLE for the 120 and 240-hour integration windows, meaning that there was shoaling in areas of elevated FTLE.*
+
+##### Depth of Sigma Theta 25.0
+
+```{r Sigma25, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+## 24
+Sigma25_GLMM24 <- glmer(Sigma25 ~ ftle24 +
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle24),!is.na(Sigma25))) 
+anovaSigma25_GLMM24 <- car::Anova(Sigma25_GLMM24, type=2)
+
+## 48
+Sigma25_GLMM48 <- glmer(Sigma25 ~ ftle48 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle48),!is.na(Sigma25))) 
+anovaSigma25_GLMM48 <- car::Anova(Sigma25_GLMM48, type=2)
+
+## 120
+Sigma25_GLMM120 <- glmer(Sigma25 ~ ftle120 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle120),!is.na(Sigma25))) 
+anovaSigma25_GLMM120 <- car::Anova(Sigma25_GLMM120, type=2)
+
+## 240
+Sigma25_GLMM240 <- glmer(Sigma25 ~ ftle240 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle240),!is.na(Sigma25))) 
+anovaSigma25_GLMM240 <- car::Anova(Sigma25_GLMM240, type=2)
+
+tSigma25_GLMM <- data.frame(Model = c(rep("GLMM Depth of SigmaTheta 25",4) ),
+                       FTLE_Integration = c("24","48","120", "240"),
+                       Slope = c(round(Sigma25_GLMM24@beta[2],4),
+                                 round(Sigma25_GLMM48@beta[2],4),
+                                 round(Sigma25_GLMM120@beta[2],4),
+                                 round(Sigma25_GLMM240@beta[2],4)
+                                 ),
+                       Intercept = c(round(Sigma25_GLMM24@beta[1],4),
+                                     round(Sigma25_GLMM48@beta[1],4),
+                                     round(Sigma25_GLMM120@beta[1],4),
+                                     round(Sigma25_GLMM240@beta[1],4)
+                                 ),
+                       pValue = c(round(anovaSigma25_GLMM24$`Pr(>Chisq)`,5),
+                                  round(anovaSigma25_GLMM48$`Pr(>Chisq)`,5),
+                                  round(anovaSigma25_GLMM120$`Pr(>Chisq)`,5),
+                                  round(anovaSigma25_GLMM240$`Pr(>Chisq)`,5)
+                                  )
+)
+tSigma25_GLMM
+```
+
+```{r modelOutSigma25, eval=FALSE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+plot_models(Sigma25_GLMM24,Sigma25_GLMM48,Sigma25_GLMM120,Sigma25_GLMM240,
+           vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, show.legend = FALSE,
+           dot.size = 4, value.size = 12, line.size = 1.25,
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("GLMM Results", subtitle = "Depth At SigmaTheta25 ~ FTLE")+
+    scale_color_manual(values=c("#440154FF",    
+                               "#31688EFF",  
+                              "#35B779FF",
+                              "#FDE725FF"
+                              ) 
+                     ) +  
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+
+##### Depth of Sigma Theta 25.5
+
+```{r Sigma25_5, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+## 24
+Sigma25_5_GLMM24 <- glmer(Sigma25_5 ~ ftle24 +
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle24),!is.na(Sigma25_5))) 
+anovaSigma25_5_GLMM24 <- car::Anova(Sigma25_5_GLMM24, type=2)
+
+## 48
+Sigma25_5_GLMM48 <- glmer(Sigma25_5 ~ ftle48 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle48),!is.na(Sigma25_5))) 
+anovaSigma25_5_GLMM48 <- car::Anova(Sigma25_5_GLMM48, type=2)
+
+## 120
+Sigma25_5_GLMM120 <- glmer(Sigma25_5 ~ ftle120 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle120),!is.na(Sigma25_5))) 
+anovaSigma25_5_GLMM120 <- car::Anova(Sigma25_5_GLMM120, type=2)
+
+## 240
+Sigma25_5_GLMM240 <- glmer(Sigma25_5 ~ ftle240 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle240),!is.na(Sigma25_5))) 
+anovaSigma25_5_GLMM240 <- car::Anova(Sigma25_5_GLMM240, type=2)
+
+tSigma25_5_GLMM <- data.frame(Model = c(rep("GLMM Depth of SigmaTheta 25.5",4) ),
+                       FTLE_Integration = c("24","48","120", "240"),
+                       Slope = c(round(Sigma25_5_GLMM24@beta[2],4),
+                                 round(Sigma25_5_GLMM48@beta[2],4),
+                                 round(Sigma25_5_GLMM120@beta[2],4),
+                                 round(Sigma25_5_GLMM240@beta[2],4)
+                                 ),
+                       Intercept = c(round(Sigma25_5_GLMM24@beta[1],4),
+                                     round(Sigma25_5_GLMM48@beta[1],4),
+                                     round(Sigma25_5_GLMM120@beta[1],4),
+                                     round(Sigma25_5_GLMM240@beta[1],4)
+                                 ),
+                       pValue = c(round(anovaSigma25_5_GLMM24$`Pr(>Chisq)`,5),
+                                  round(anovaSigma25_5_GLMM48$`Pr(>Chisq)`,5),
+                                  round(anovaSigma25_5_GLMM120$`Pr(>Chisq)`,5),
+                                  round(anovaSigma25_5_GLMM240$`Pr(>Chisq)`,5)
+                                  )
+)
+tSigma25_5_GLMM
+```
+
+```{r modelOutSigma25_5, eval=FALSE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+plot_models(Sigma25_5_GLMM24,Sigma25_5_GLMM48,Sigma25_5_GLMM120,Sigma25_5_GLMM240,
+           vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, show.legend = FALSE,
+           dot.size = 4, value.size = 12, line.size = 1.25,
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("GLMM Results", subtitle = "Depth At SigmaTheta 25.5 ~ FTLE")+
+    scale_color_manual(values=c("#440154FF",    
+                               "#31688EFF",  
+                              "#35B779FF",
+                              "#FDE725FF"
+                              ) 
+                     ) +  
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+
+##### Depth of Sigma Theta 26.0
+
+```{r Sigma26, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+## 24
+Sigma26_GLMM24 <- glmer(Sigma26 ~ ftle24 +
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle24),!is.na(Sigma26))) 
+anovaSigma26_GLMM24 <- car::Anova(Sigma26_GLMM24, type=2)
+
+## 48
+Sigma26_GLMM48 <- glmer(Sigma26 ~ ftle48 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle48),!is.na(Sigma26))) 
+anovaSigma26_GLMM48 <- car::Anova(Sigma26_GLMM48, type=2)
+
+## 120
+Sigma26_GLMM120 <- glmer(Sigma26 ~ ftle120 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle120),!is.na(Sigma26))) 
+anovaSigma26_GLMM120 <- car::Anova(Sigma26_GLMM120, type=2)
+
+## 240
+Sigma26_GLMM240 <- glmer(Sigma26 ~ ftle240 + 
+                           (1|Year) + (1|Season) + (1|Line),
+                           family = gaussian, 
+                           data = dataCTD %>% dplyr::filter(!is.na(ftle240),!is.na(Sigma26))) 
+anovaSigma26_GLMM240 <- car::Anova(Sigma26_GLMM240, type=2)
+
+tSigma26_GLMM <- data.frame(Model = c(rep("GLMM Depth of SigmaTheta 26",4) ),
+                       FTLE_Integration = c("24","48","120", "240"),
+                       Slope = c(round(Sigma26_GLMM24@beta[2],4),
+                                 round(Sigma26_GLMM48@beta[2],4),
+                                 round(Sigma26_GLMM120@beta[2],4),
+                                 round(Sigma26_GLMM240@beta[2],4)
+                                 ),
+                       Intercept = c(round(Sigma26_GLMM24@beta[1],4),
+                                     round(Sigma26_GLMM48@beta[1],4),
+                                     round(Sigma26_GLMM120@beta[1],4),
+                                     round(Sigma26_GLMM240@beta[1],4)
+                                 ),
+                       pValue = c(round(anovaSigma26_GLMM24$`Pr(>Chisq)`,5),
+                                  round(anovaSigma26_GLMM48$`Pr(>Chisq)`,5),
+                                  round(anovaSigma26_GLMM120$`Pr(>Chisq)`,5),
+                                  round(anovaSigma26_GLMM240$`Pr(>Chisq)`,5)
+                                  )
+)
+tSigma26_GLMM
+```
+
+```{r modelOutSigma26, eval=FALSE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+plot_models(Sigma26_GLMM24,Sigma26_GLMM48,Sigma26_GLMM120,Sigma26_GLMM240,
+           vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, show.legend = FALSE,
+           dot.size = 4, value.size = 12, line.size = 1.25,
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("GLMM Results", subtitle = "Depth At SigmaTheta26 ~ FTLE")+
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+
+
+
+```{r SST_Pred, eval=FALSE, include=FALSE}
+plot_model(SST_GLMM240,type="diag")
+```
+
+##### Supplemental Figure 2
+
+```{r p_CTDsigmathetaGLMM_All, fig.height=14, fig.width=12, message=FALSE, warning=FALSE}
+p_ctdSigmathetaAll <- plot_models(Sigma26_GLMM24,Sigma26_GLMM48,
+                                    Sigma26_GLMM120,Sigma26_GLMM240,
+                                    Sigma25_5_GLMM24,Sigma25_5_GLMM48,
+                                    Sigma25_5_GLMM120,Sigma25_5_GLMM240, 
+                                    Sigma25_GLMM24,Sigma25_GLMM48,
+                                    Sigma25_GLMM120,Sigma25_GLMM240,
+                                    vline.color = "red",
+                                    show.p=TRUE,show.values=TRUE, 
+                                    spacing = .85, p.shape=FALSE,
+                                    show.legend = TRUE, dot.size = 3.5, value.size = 4.5, line.size = 1.25,
+                                    axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) +
+    # ggtitle("Depth at Sigma Theta ~ FTLE")+
+    scale_y_continuous(breaks=c(-25,0,25), limits = c(-27.5,27.5)) +
+    theme_minimal() +
+    theme(axis.title = element_text(face="bold", size=30),
+          axis.text = element_text( face="bold", size=30),
+          plot.title = element_text(face="bold", size=25,hjust = 0.5),
+          plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+          plot.caption = element_text( face="bold", size=12,hjust = 0),
+          legend.position = "right",#c(0.785,0.4),
+          legend.direction = "vertical",
+          legend.key.size = unit(1.2,"cm"),
+          legend.background = element_rect(fill="white",color="black"),
+          legend.text = element_text(face="bold", size=28),
+          legend.title = element_text(face="bold", size=30, hjust = 0.5))
+  
+  p_ctdSigmathetaAll$guides$colour$title <- "Response Variable"
+  p_ctdSigmathetaAll$data$group <- factor(x = c(rep("Depth at Sigma Theta 26.0",4), rep("Depth at Sigma Theta 25.5",4), rep("Depth at Sigma Theta 25.0",4)), levels = c("Depth at Sigma Theta 26.0","Depth at Sigma Theta 25.5","Depth at Sigma Theta 25.0") )
+  p_ctdSigmathetaAll <- p_ctdSigmathetaAll + #c("#3B9AB2", "#78B7C5", "#EBCC2A", "#E1AF00", "#F21A00"),
+    scale_color_manual(values=c("Depth at Sigma Theta 26.0" =  "#0B775E",
+                                "Depth at Sigma Theta 25.5" =  "#46ACC8",
+                                "Depth at Sigma Theta 25.0" =  "#440154FF"
+    ) 
+    )
+  p_ctdSigmathetaAll
+```
+
+
+```{r p_sigmathetaCTD_GLMER, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+testSetp_CTD_ST24 <- data.frame(ftle24 = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in Response scale
+testSetp_CTD_ST24$fit <- predict(Sigma25_5_GLMM24,newdata = testSetp_CTD_ST24, type = "response", re.form=~0,se.fit = TRUE)
+# Calculate the standard errors of the predicted values
+X24 <- model.matrix(~ ftle24, testSetp_CTD_ST24)
+V24 <- vcov(Sigma25_5_GLMM24, full = TRUE) #calculate the covariance matrix of the model
+se24 <- sqrt(diag(X24 %*% V24 %*% t(X24))) # take the square root of the diagonal elements to obtain the standard errors
+
+# Convert the Log Standard errors into the Response scale
+testSetp_CTD_ST24$lwr <- testSetp_CTD_ST24$fit - 1.96 * se24
+testSetp_CTD_ST24$upr <- testSetp_CTD_ST24$fit + 1.96 * se24
+testSetp_CTD_ST24$model <- "24 hrs"
+
+testSetp_CTD_ST48 <- data.frame(ftle48 = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in Response scale
+testSetp_CTD_ST48$fit <- predict(Sigma25_5_GLMM48,newdata = testSetp_CTD_ST48, type = "response", re.form=~0,se.fit = TRUE)
+# Calculate the standard errors of the predicted values
+X48 <- model.matrix(~ ftle48, testSetp_CTD_ST48)
+V48 <- vcov(Sigma25_5_GLMM48, full = TRUE) #calculate the covariance matrix of the model
+se48 <- sqrt(diag(X48 %*% V48 %*% t(X48))) # take the square root of the diagonal elements to obtain the standard errors
+
+# Convert the Log Standard errors into the Response scale
+testSetp_CTD_ST48$lwr <- testSetp_CTD_ST48$fit - 1.96 * se48
+testSetp_CTD_ST48$upr <- testSetp_CTD_ST48$fit + 1.96 * se48
+testSetp_CTD_ST48$model <- "48 hrs"
+
+testSetp_CTD_ST120 <- data.frame(ftle120 = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in Response scale
+testSetp_CTD_ST120$fit <- predict(Sigma25_5_GLMM120,newdata = testSetp_CTD_ST120, type = "response", re.form=~0,se.fit = TRUE)
+# Calculate the standard errors of the predicted values
+X120 <- model.matrix(~ ftle120, testSetp_CTD_ST120)
+V120 <- vcov(Sigma25_5_GLMM120, full = TRUE) #calculate the covariance matrix of the model
+se120 <- sqrt(diag(X120 %*% V120 %*% t(X120))) # take the square root of the diagonal elements to obtain the standard errors
+
+# Convert the Log Standard errors into the Response scale
+testSetp_CTD_ST120$lwr <- testSetp_CTD_ST120$fit - 1.96 * se120
+testSetp_CTD_ST120$upr <- testSetp_CTD_ST120$fit + 1.96 * se120
+testSetp_CTD_ST120$model <- "120 hrs"
+
+testSetp_CTD_ST240 <- data.frame(ftle240 = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in Response scale
+testSetp_CTD_ST240$fit <- predict(Sigma25_5_GLMM240,newdata = testSetp_CTD_ST240, type = "response", re.form=~0,se.fit = TRUE)
+# Calculate the standard errors of the predicted values
+X240 <- model.matrix(~ ftle240, testSetp_CTD_ST240)
+V240 <- vcov(Sigma25_5_GLMM240, full = TRUE) #calculate the covariance matrix of the model
+se240 <- sqrt(diag(X240 %*% V240 %*% t(X240))) # take the square root of the diagonal elements to obtain the standard errors
+
+# Convert the Log Standard errors into the Response scale
+testSetp_CTD_ST240$lwr <- testSetp_CTD_ST240$fit - 1.96 * se240
+testSetp_CTD_ST240$upr <- testSetp_CTD_ST240$fit + 1.96 * se240
+testSetp_CTD_ST240$model <- "240 hrs"
+
+ggplot() + 
+  geom_ribbon(data=testSetp_CTD_ST240,aes(x=ftle240,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSetp_CTD_ST240,aes(x=ftle240,y = fit, color=model), size = 2, linetype=1)+
+  geom_ribbon(data=testSetp_CTD_ST48,aes(x=ftle48,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSetp_CTD_ST48,aes(x=ftle48,y = fit, color=model), size = 2, linetype=2)+
+  geom_ribbon(data=testSetp_CTD_ST24,aes(x=ftle24,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSetp_CTD_ST24,aes(x=ftle24,y = fit, color=model), size = 2, linetype=2)+
+  geom_ribbon(data=testSetp_CTD_ST120,aes(x=ftle120,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +  
+  geom_line(data=testSetp_CTD_ST120,aes(x=ftle120,y = fit, color=model), size = 2, linetype=1)+
+  scale_color_manual(name= "FTLE\nIntegration",
+                       breaks=c("24 hrs","48 hrs","120 hrs","240 hrs"),
+                       values=c( "24 hrs" =     "#FDE725FF",     
+                               "48 hrs" = "#35B779FF", 
+                               "120 hrs" =  "#31688EFF", 
+                               "240 hrs" = "#440154FF"
+                               )) +
+  scale_fill_manual(name= "FTLE\nIntegration",
+                      breaks=c("24 hrs","48 hrs","120 hrs","240 hrs"),
+                       values=c( "24 hrs" =     "#FDE725FF",    
+                               "48 hrs" = "#35B779FF",
+                               "120 hrs" =  "#31688EFF", 
+                               "240 hrs" = "#440154FF"
+                               )) +
+  scale_x_continuous(breaks=seq(-1.5,2,.5),limits=c(-1.75,1.76), expand = c(0.005, 0.025))+
+  ylab(expression( bold(Depth~(meters)))) +    #Potential Density (kg/m^3)
+  xlab(expression( bold(FTLE~(day^bold({bold("-1")})))) )+  
+  guides(fill = guide_legend(order=1,override.aes = list(alpla=0.05)),
+         color = guide_legend(order=1,override.aes = list(alpla=1)))+
+  labs(caption = "Dashed lines indicate p-values > .05") + 
+  ggtitle("Depth of Potential Density of 25.5 ~ FTLE") +
+  theme_pubclean()+
+  theme(axis.title = element_text(face="bold", size=30),
+        axis.text = element_text( face="bold", size=28),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=18,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=14,hjust = 0),
+        legend.position="right",
+        legend.text = element_text(face="bold", size=28),
+        legend.title = element_text(face="bold", size=30),
+        legend.key.size = unit(2,"cm"),
+        strip.text.x = element_text(size = 22, face="bold"))
+```
+
+
+## FTLE and Krill
+
+Our analysis is centered around the influence of frontal features (areas of elevated FTLE) on krill aggregation (i.e. density). Krill is patchily distributed, which means that there are large, diffuse areas of low density krill, interspersed with areas of increased density. To match the FTLE data resolution, we combined 200 x 5 meter cells into 600 meter columns for analysis.
+
+```{r krillRarity,results='hold', echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE,collapse=TRUE}
+# Only ~ 5% of cells in the full resolution dataset have krill
+cat(paste0("Full resolution dataset:\nPercent Cells with Krill = ",
+acoustics_DF_FTLE_W600 %>% 
+  group_by(KrillBiomass>0) %>% 
+  summarize(Num = n()) %>% 
+  summarize(PercentWithKrill = round(Num[2]/(Num[1]+Num[2]),3)) %>% first()*100,"%"  ) )
+
+# ~44% of cells in the 600 meter dataset have krill
+cat(paste0("\n\n600 meter resolution dataset:\nPercent Columns with Krill = ",
+dataGamm %>% 
+  group_by(KrillBiomass>0) %>% 
+  summarize(Num = n()) %>% 
+  summarize(PercentWithKrill = round(Num[2]/(Num[1]+Num[2]),3))%>% first()*100,"%" ) )
+```
+
+
+### 2. Does Krill presence increase with increasing FTLE?
+
+#### GLMM (Krill Presence ~ FTLE)
+
+The relationship between the likelihood of krill presence and FTLE is explored using a linear mixed-effects model. Here we are using a logistic regression to test the probability of krill presence across a range of FTLE values for each of the 4 integration times. We include a correlation structure to address spatial autocorrelation in our data.
+
+  - **We did not observe a significant positive relationship between FTLE and Krill Presence. However, the trend among the models showed a higher likelihood of krill presence at longer integration times (120 and 240 hour) indicating that krill presence may by influenced by processes at longer time-scales than those included in this study.**
+  - **We did observe a significant negative relationship between FTLE and Krill Presence for the 24 hour integration time.**
+
+```{r glmmPQL_Cor, eval=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=TRUE, paged.print=TRUE}
+# Use previously processed model to save time
+if(!exists("krill_glmmPQL_CorExp_24_Hrs")){
+  krill_glmmPQL_CorExp_24_Hrs <- glmmPQL(KrillPresence ~ ftle24_L , 
+                                random = ~ 1 | Year/Season/Line,
+                                family = binomial(link = "logit"),
+                                correlation = corExp(form = ~ Long+Lat),
+                                data = dataGamm %>% dplyr::filter(!is.na(ftle24_L)))
+  # Save Model results to a file
+  saveRDS(krill_glmmPQL_CorExp_24_Hrs, file = "./Models/krill_glmmPQL_CorExp_24_Hrs.rds")
+}
+# summary(krill_glmmPQL_CorExp_24_Hrs)
+
+# Use previously processed model to save time
+if(!exists("krill_glmmPQL_CorExp_48_Hrs")){
+  krill_glmmPQL_CorExp_48_Hrs <- glmmPQL(KrillPresence ~ ftle48_L,
+                                random = ~ 1 | Year/Season/Line,
+                                family = binomial(link = "logit"),
+                                correlation = corExp(form = ~ Long+Lat),
+                                data = dataGamm %>% dplyr::filter(!is.na(ftle48_L)))
+  # Save Model results to a file
+  saveRDS(krill_glmmPQL_CorExp_48_Hrs, file = "./Models/krill_glmmPQL_CorExp_48_Hrs.rds")
+}
+# summary(krill_glmmPQL_CorExp_48_Hrs)
+
+# Use previously processed model to save time
+if(!exists("krill_glmmPQL_CorExp_120_Hrs")){
+  krill_glmmPQL_CorExp_120_Hrs <- glmmPQL(KrillPresence ~ ftle120_L,
+                                random = ~ 1 | Year/Season/Line,
+                                family = binomial(link = "logit"),
+                                correlation = corExp(form = ~ Long+Lat),
+                                data = dataGamm %>% dplyr::filter(!is.na(ftle120_L)))
+  # Save Model results to a file
+  saveRDS(krill_glmmPQL_CorExp_120_Hrs, file = "./Models/krill_glmmPQL_CorExp_120_Hrs.rds")
+}
+# summary(krill_glmmPQL_CorExp_120_Hrs_corGaus)
+
+# Use previously processed model to save time
+if(!exists("krill_glmmPQL_CorExp_240_Hrs")){
+  krill_glmmPQL_CorExp_240_Hrs <- glmmPQL(KrillPresence ~ ftle240_L,
+                                random = ~ 1 | Year/Season/Line,
+                                family = binomial(link = "logit"),
+                                correlation = corExp(form = ~ Long+Lat),
+                                data = dataGamm %>% dplyr::filter(!is.na(ftle240_L)))
+    # Save Model results to a file
+  saveRDS(krill_glmmPQL_CorExp_240_Hrs, file = "./Models/krill_glmmPQL_CorExp_240_Hrs.rds")
+}
+# summary(krill_glmmPQL_CorExp_240_Hrs)
+tKrillPres <- data.frame(Model = rep("Krill Presence ~ FTLE",4),
+                  FTLE_Integration = c("24","48","120", "240"),
+                  Slope = 
+                    c(round(as.data.frame(coef(summary(krill_glmmPQL_CorExp_24_Hrs)))$Value[2],3),
+                      round(as.data.frame(coef(summary(krill_glmmPQL_CorExp_48_Hrs)))$Value[2],3),
+                      round(as.data.frame(coef(summary(krill_glmmPQL_CorExp_120_Hrs)))$Value[2],3),
+                      round(as.data.frame(coef(summary(krill_glmmPQL_CorExp_240_Hrs)))$Value[2],3)
+                      ),
+                  Intercept =
+                    c(round(as.data.frame(coef(summary(krill_glmmPQL_CorExp_24_Hrs)))$Value[1],3),
+                      round(as.data.frame(coef(summary(krill_glmmPQL_CorExp_48_Hrs)))$Value[1],3),
+                      round(as.data.frame(coef(summary(krill_glmmPQL_CorExp_120_Hrs)))$Value[1],3),
+                      round(as.data.frame(coef(summary(krill_glmmPQL_CorExp_240_Hrs)))$Value[1],3)
+                      ),
+                  pValue = 
+                    c(round(as.data.frame(coef(summary(krill_glmmPQL_CorExp_24_Hrs)))$'p-value'[2],5),                          round(as.data.frame(coef(summary(krill_glmmPQL_CorExp_48_Hrs)))$'p-value'[2],5),
+                     round(as.data.frame(coef(summary(krill_glmmPQL_CorExp_120_Hrs)))$'p-value'[2],5),
+                     round(as.data.frame(coef(summary(krill_glmmPQL_CorExp_240_Hrs)))$'p-value'[2],5)                           )
+  )
+tKrillPres
+```
+
+```{r glmmPQL_PresAbs_PlotModels, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+# Plot the models together
+plot_models(krill_glmmPQL_CorExp_24_Hrs,krill_glmmPQL_CorExp_48_Hrs,
+            krill_glmmPQL_CorExp_120_Hrs,krill_glmmPQL_CorExp_240_Hrs,
+            vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, show.legend = FALSE,
+            dot.size = 4, value.size = 12, line.size = 1.25,
+            axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) +
+  scale_color_manual(values=c("#440154FF",    
+                               "#31688EFF",  
+                              "#35B779FF",
+                              "#FDE725FF"
+                              ) 
+                     ) +
+  ggtitle("GLMM: Krill Presence ~ FTLE")+
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+
+```{r p_ftleGLMMPQL, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include = FALSE}
+testSetp24 <- data.frame(ftle24_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in probability space
+testSetp24$fit <- predict(krill_glmmPQL_CorExp_24_Hrs,testSetp24, type = "response", level=0)
+# This function outputs the predicted values in Logit space
+SE_p24 <- predictSE(krill_glmmPQL_CorExp_24_Hrs,testSetp24, type = "response", level = 0,se.fit = TRUE)
+# Convert the Logit Standard errors into Probabilities
+testSetp24$lwr <- logit2prob(SE_p24$fit-SE_p24$se.fit)
+testSetp24$upr <- logit2prob(SE_p24$fit+SE_p24$se.fit)
+testSetp24$model <- "24 hrs"
+
+testSetp48 <- data.frame(ftle48_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in probability space
+testSetp48$fit <- predict(krill_glmmPQL_CorExp_48_Hrs,testSetp48, type = "response", level=0)
+# This function outputs the predicted values in Logit space
+SE_p48 <- predictSE(krill_glmmPQL_CorExp_48_Hrs,testSetp48, type = "response", level = 0,se.fit = TRUE)
+# Convert the Logit Standard errors into Probabilities
+testSetp48$lwr <- logit2prob(SE_p48$fit-SE_p48$se.fit)
+testSetp48$upr <- logit2prob(SE_p48$fit+SE_p48$se.fit)
+testSetp48$model <- "48 hrs"
+
+testSetp120 <- data.frame(ftle120_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in probability space
+testSetp120$fit <- predict(krill_glmmPQL_CorExp_120_Hrs,testSetp120, type = "response", level=0)
+# This function outputs the predicted values in Logit space
+SE_p120 <- predictSE(krill_glmmPQL_CorExp_120_Hrs,testSetp120, type = "response", level = 0,se.fit = TRUE)
+# Convert the Logit Standard errors into Probabilities
+testSetp120$lwr <- logit2prob(SE_p120$fit-SE_p120$se.fit)
+testSetp120$upr <- logit2prob(SE_p120$fit+SE_p120$se.fit)
+testSetp120$model <- "120 hrs"
+
+testSetp240 <- data.frame(ftle240_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in probability space
+testSetp240$fit <- predict(krill_glmmPQL_CorExp_240_Hrs,testSetp240, type = "response", level=0)
+# This function outputs the predicted values in Logit space
+SE_p240 <- predictSE(krill_glmmPQL_CorExp_240_Hrs,testSetp240, type = "response", level = 0,se.fit = TRUE)
+# Convert the Logit Standard errors into Probabilities
+testSetp240$lwr <- logit2prob(SE_p240$fit-SE_p240$se.fit)
+testSetp240$upr <- logit2prob(SE_p240$fit+SE_p240$se.fit)
+testSetp240$model <- "240 hrs"
+
+ggplot() + 
+  geom_ribbon(data=testSetp240,aes(x=ftle240_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSetp240,aes(x=ftle240_L,y = fit, color=model), size = 2, linetype=2)+
+  geom_ribbon(data=testSetp48,aes(x=ftle48_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSetp48,aes(x=ftle48_L,y = fit, color=model), size = 2, linetype=2)+
+  geom_ribbon(data=testSetp24,aes(x=ftle24_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSetp24,aes(x=ftle24_L,y = fit, color=model), size = 2, linetype=1)+
+  geom_ribbon(data=testSetp120,aes(x=ftle120_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) + 
+  geom_line(data=testSetp120,aes(x=ftle120_L,y = fit, color=model), size = 2, linetype=2)+
+  scale_color_manual(name= "FTLE\nIntegration",
+                     breaks=c("24 hrs","48 hrs","120 hrs","240 hrs"),
+                     values=c( "24 hrs" =     "#FDE725FF",   
+                               "48 hrs" = "#35B779FF",
+                               "120 hrs" =  "#31688EFF",
+                               "240 hrs" = "#440154FF"
+                     )) +
+  scale_fill_manual(name= "FTLE\nIntegration",
+                    breaks=c("24 hrs","48 hrs","120 hrs","240 hrs"),
+                    values=c( "24 hrs" =     "#FDE725FF",   
+                              "48 hrs" = "#35B779FF",
+                              "120 hrs" =  "#31688EFF",
+                              "240 hrs" = "#440154FF"
+                    )) +
+  scale_x_continuous(breaks=seq(-1.5,2,.5),limits=c(-1.75,1.76), expand = c(0.005, 0.025))+
+  scale_y_continuous(name="Probability of Krill Presence",limits=c(0,1), 
+                       expand = c(0.005, 0.005)) +
+  xlab(expression( bold(FTLE~(day^bold({bold("-1")})))) )+  
+  guides(fill = guide_legend(order=1,override.aes = list(alpla=0.05)),
+         color = guide_legend(order=1,override.aes = list(alpla=1)))+
+  labs(caption = "Dashed lines indicate p-values > .05") + 
+  ggtitle("Krill Presence ~ FTLE",subtitle = "glmmPQL with Spatial Autocorrelation Structure") +
+  theme_pubclean()+
+  theme(axis.title = element_text(face="bold", size=22),
+        axis.text = element_text( face="bold", size=18),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=18,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=14,hjust = 0),
+        legend.position="right",
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24),
+        strip.text.x = element_text(size = 22, face="bold"))
+```
+
+```{r krillGLMM_NoCor, eval=FALSE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+# check model without the temporal autocorrelation term 
+krill_glmmPQL_24_Hrs_NoCor <- update(krill_glmmPQL_CorExp_24_Hrs,correlation = NULL)
+krill_glmmPQL_48_Hrs_NoCor <- update(krill_glmmPQL_CorExp_48_Hrs,correlation = NULL)
+krill_glmmPQL_120_Hrs_NoCor <- update(krill_glmmPQL_CorExp_120_Hrs,correlation = NULL)
+krill_glmmPQL_240_Hrs_NoCor <- update(krill_glmmPQL_CorExp_240_Hrs,correlation = NULL)
+plot_models(krill_glmmPQL_24_Hrs_NoCor,krill_glmmPQL_48_Hrs_NoCor,krill_glmmPQL_120_Hrs_NoCor,krill_glmmPQL_240_Hrs_NoCor,
+           vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, show.legend = FALSE,
+           dot.size = 4, value.size = 12, line.size = 1.25,
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("GLMM Krill Presence ~ FTLE", subtitle = "(No Correlation Structure)")+
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+
+```{r ACF_krillGLMM, eval=FALSE, fig.height=12, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+grid.arrange(
+  plot(ACF(krill_glmmPQL_24_Hrs_NoCor,resType="normalized"),alpha=0.05, main="24hr ACF without corCAR1"),
+  plot(ACF(krill_glmmPQL_CorExp_24_Hrs,resType="normalized"),alpha=0.05, main="24hr ACF with corCAR1"),
+  plot(ACF(krill_glmmPQL_48_Hrs_NoCor,resType="normalized"),alpha=0.05, main="48hr ACF without corCAR1"),
+  plot(ACF(krill_glmmPQL_CorExp_48_Hrs,resType="normalized"),alpha=0.05, main="48hr ACF with corCAR1"),
+  plot(ACF(krill_glmmPQL_120_Hrs_NoCor,resType="normalized"),alpha=0.05, main="120hr ACF without corCAR1"),
+  plot(ACF(krill_glmmPQL_CorExp_120_Hrs,resType="normalized"),alpha=0.05, main="120hr ACF with corCAR1"),
+  plot(ACF(krill_glmmPQL_240_Hrs_NoCor,resType="normalized"),alpha=0.05, main="240hr ACF without corCAR1"),
+  plot(ACF(krill_glmmPQL_CorExp_240_Hrs,resType="normalized"),alpha=0.05, main="240hr ACF with corCAR1"),
+  nrow=4,ncol=2)
+```
+
+
+### 3. Does Krill density increase with increasing FTLE?
+  
+Here we are modelling the relationship between metrics of Krill Density within a column and FTLE for each of our four Integration lengths (24, 48, 120 and 240 Hours). 
+
+*Note: for these analyses, we are only testing the influence of FTLE on 600 meter columns that have krill.*
+
+#### GLMM (Krill Density ~ FTLE)
+
+For this analysis, we fit generalized linear mixed effects model using the glmmPQL package with FTLE as the independent variable and one of several metrics of Krill Density as the response variable. Krill Density is gamma distributed (positively skewed) in our dataset and we fit the model with a log-link. Our model has Year, Season and Line as random effects to account for the differences we might expect across these variables. We also included a correlation structure to account for spatial autocorrelation in our data.
+
+##### Geometric Mean Non Zero
+
+For every 600 meter column, we calculated the geometric mean krill density for cells within a column containing krill (i.e. For the Geometric mean, Density values were logged prior to taking the mean). 
+
+```{r krill_gMNZGLMMPQL_LogLink, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+## 24
+# Use previously processed model to save time
+if(!exists("krillDensity_gMNZGLMMPQLLogLink24")){
+  krillDensity_gMNZGLMMPQLLogLink24 <- glmmPQL(KrillDensity_geoMeanNonZero ~ ftle24_L ,
+                                  random = ~ 1 | Year/Season/Line,
+                                  family = Gamma(link = "log"),
+                                  correlation = corExp(form = ~ Long+Lat),
+                                  data = dataGamm %>% dplyr::filter(!is.na(ftle24_L),KrillBiomass > 0) )
+  # Save Model results to a file
+  saveRDS(krillDensity_gMNZGLMMPQLLogLink24, file = "./Models/krillDensity_gMNZGLMMPQLLogLink24.rds")
+}
+anovagMNZGLMMPQLLogLink24 <- car::Anova(krillDensity_gMNZGLMMPQLLogLink24, type=2)
+
+## 48
+# Use previously processed model to save time
+if(!exists("krillDensity_gMNZGLMMPQLLogLink48")){
+  krillDensity_gMNZGLMMPQLLogLink48 <- glmmPQL(KrillDensity_geoMeanNonZero ~ ftle48_L ,
+                                  random = ~ 1 | Year/Season/Line,
+                                  family = Gamma(link = "log"),
+                                  correlation = corExp(form = ~ Long+Lat),
+                                  data = dataGamm %>% dplyr::filter(!is.na(ftle48_L),KrillBiomass > 0) )
+  # Save Model results to a file
+  saveRDS(krillDensity_gMNZGLMMPQLLogLink48, file = "./Models/krillDensity_gMNZGLMMPQLLogLink48.rds")
+}
+anovagMNZGLMMPQLLogLink48 <- car::Anova(krillDensity_gMNZGLMMPQLLogLink48, type=2)
+
+## 120
+# Use previously processed model to save time
+if(!exists("krillDensity_gMNZGLMMPQLLogLink120")){
+  krillDensity_gMNZGLMMPQLLogLink120 <- glmmPQL(KrillDensity_geoMeanNonZero ~ ftle120_L ,
+                                  random = ~ 1 | Year/Season/Line,
+                                  family = Gamma(link = "log"),
+                                  correlation = corExp(form = ~ Long+Lat),
+                                  data = dataGamm %>% dplyr::filter(!is.na(ftle120_L),KrillBiomass > 0) )
+  # Save Model results to a file
+  saveRDS(krillDensity_gMNZGLMMPQLLogLink120, file = "./Models/krillDensity_gMNZGLMMPQLLogLink120.rds")
+}
+anovagMNZGLMMPQLLogLink120 <- car::Anova(krillDensity_gMNZGLMMPQLLogLink120, type=2)
+
+## 240
+# Use previously processed model to save time
+if(!exists("krillDensity_gMNZGLMMPQLLogLink240")){
+  krillDensity_gMNZGLMMPQLLogLink240 <- glmmPQL(KrillDensity_geoMeanNonZero ~ ftle240_L,
+                                  random = ~ 1 | Year/Season/Line,
+                                  family = Gamma(link = "log"),
+                                  correlation = corGaus(form = ~ Long+Lat),
+                                  data = dataGamm %>% dplyr::filter(!is.na(ftle240_L),KrillBiomass > 0) )
+  # Save Model results to a file
+  saveRDS(krillDensity_gMNZGLMMPQLLogLink240, file = "./Models/krillDensity_gMNZGLMMPQLLogLink240.rds")
+}
+anovagMNZGLMMPQLLogLink240 <- car::Anova(krillDensity_gMNZGLMMPQLLogLink240, type=2)
+
+tgMNZGLMMPQLLogLink <- data.frame(Model = c(rep("GLMMPQL_LogLink KrillDensity_geoMeanNonZero",4) ),
+                       FTLE_Integration = c("24","48","120", "240"),
+                       Slope = c(round(krillDensity_gMNZGLMMPQLLogLink24$coefficients$fixed[2],4),
+                                 round(krillDensity_gMNZGLMMPQLLogLink48$coefficients$fixed[2],4),
+                                 round(krillDensity_gMNZGLMMPQLLogLink120$coefficients$fixed[2],4),
+                                 round(krillDensity_gMNZGLMMPQLLogLink240$coefficients$fixed[2],4)
+                                 ),
+                       Intercept = c(round(krillDensity_gMNZGLMMPQLLogLink24$coefficients$fixed[1],4),
+                                     round(krillDensity_gMNZGLMMPQLLogLink48$coefficients$fixed[1],4),
+                                     round(krillDensity_gMNZGLMMPQLLogLink120$coefficients$fixed[1],4),
+                                     round(krillDensity_gMNZGLMMPQLLogLink240$coefficients$fixed[1],4)
+                                 ),
+                       pValue = c(round(anovagMNZGLMMPQLLogLink24$`Pr(>Chisq)`,5),
+                                  round(anovagMNZGLMMPQLLogLink48$`Pr(>Chisq)`,5),
+                                  round(anovagMNZGLMMPQLLogLink120$`Pr(>Chisq)`,5),
+                                  round(anovagMNZGLMMPQLLogLink240$`Pr(>Chisq)`,5)
+                                  )
+)
+tgMNZGLMMPQLLogLink
+```
+
+```{r modelOutgMNZ_PQLLogLink, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+plot_models(krillDensity_gMNZGLMMPQLLogLink24,krillDensity_gMNZGLMMPQLLogLink48,krillDensity_gMNZGLMMPQLLogLink120,krillDensity_gMNZGLMMPQLLogLink240,
+           vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, 
+           show.legend = FALSE, transform = "exp",
+           dot.size = 4, value.size = 12, line.size = 1.25,
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("Geometric Mean of Non-Zero Krill Density ~ FTLE", 
+          subtitle = "GLMM_PQL Log-Link with Spatial Autocorrelation Structure")+
+  scale_color_manual(values=c("#440154FF",    
+                               "#31688EFF",  
+                              "#35B779FF",
+                              "#FDE725FF"
+                              ) 
+                     ) +
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+
+##### Mean Non Zero
+
+For every 600 meter column, we calculated the mean krill density for cells within a column containing krill (i.e. Mean Non-Zero). 
+
+```{r krill_MNZGLMMPQL_LogLink, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+## 24
+# Use previously processed model to save time
+if(!exists("krillDensity_MNZGLMMPQLLogLink24")){
+  krillDensity_MNZGLMMPQLLogLink24 <- glmmPQL(KrillDensity_MeanNonZero ~ ftle24_L ,
+                                  random = ~ 1 | Year/Season/Line,
+                                  family = Gamma(link = "log"),
+                                  correlation = corExp(form = ~ Long+Lat),
+                                  data = dataGamm %>% dplyr::filter(!is.na(ftle24_L),KrillBiomass > 0) )
+  # Save Model results to a file
+  saveRDS(krillDensity_MNZGLMMPQLLogLink24, file = "./Models/krillDensity_MNZGLMMPQLLogLink24.rds")
+}
+anovaMNZGLMMPQLLogLink24 <- car::Anova(krillDensity_MNZGLMMPQLLogLink24, type=2)
+
+## 48
+# Use previously processed model to save time
+if(!exists("krillDensity_MNZGLMMPQLLogLink48")){
+  krillDensity_MNZGLMMPQLLogLink48 <- glmmPQL(KrillDensity_MeanNonZero ~ ftle48_L ,
+                                  random = ~ 1 | Year/Season/Line,
+                                  family = Gamma(link = "log"),
+                                  correlation = corExp(form = ~ Long+Lat),
+                                  data = dataGamm %>% dplyr::filter(!is.na(ftle48_L),KrillBiomass > 0) )
+  # Save Model results to a file
+  saveRDS(krillDensity_MNZGLMMPQLLogLink48, file = "./Models/krillDensity_MNZGLMMPQLLogLink48.rds")
+}
+anovaMNZGLMMPQLLogLink48 <- car::Anova(krillDensity_MNZGLMMPQLLogLink48, type=2)
+
+## 120
+# Use previously processed model to save time
+if(!exists("krillDensity_MNZGLMMPQLLogLink120")){
+  krillDensity_MNZGLMMPQLLogLink120 <- glmmPQL(KrillDensity_MeanNonZero ~ ftle120_L ,
+                                  random = ~ 1 | Year/Season/Line,
+                                  family = Gamma(link = "log"),
+                                  correlation = corExp(form = ~ Long+Lat),
+                                  data = dataGamm %>% dplyr::filter(!is.na(ftle120_L),KrillBiomass > 0) )
+  # Save Model results to a file
+  saveRDS(krillDensity_MNZGLMMPQLLogLink120, file = "./Models/krillDensity_MNZGLMMPQLLogLink120.rds")
+}
+anovaMNZGLMMPQLLogLink120 <- car::Anova(krillDensity_MNZGLMMPQLLogLink120, type=2)
+
+## 240
+# Use previously processed model to save time
+if(!exists("krillDensity_MNZGLMMPQLLogLink240")){
+  krillDensity_MNZGLMMPQLLogLink240 <- glmmPQL(KrillDensity_MeanNonZero ~ ftle240_L ,
+                                  random = ~ 1 | Year/Season/Line,
+                                  family = Gamma(link = "log"),
+                                  correlation = corExp(form = ~ Long+Lat),
+                                  data = dataGamm %>% dplyr::filter(!is.na(ftle240_L),KrillBiomass > 0) )
+  # Save Model results to a file
+  saveRDS(krillDensity_MNZGLMMPQLLogLink240, file = "./Models/krillDensity_MNZGLMMPQLLogLink240.rds")
+}
+anovaMNZGLMMPQLLogLink240 <- car::Anova(krillDensity_MNZGLMMPQLLogLink240, type=2)
+
+tMNZGLMMPQLLogLink <- data.frame(Model = c(rep("GLMMPQL_LogLink KrillDensity_MeanNonZero",4) ),
+                       FTLE_Integration = c("24","48","120", "240"),
+                       Slope = c(round(krillDensity_MNZGLMMPQLLogLink24$coefficients$fixed[2],4),
+                                 round(krillDensity_MNZGLMMPQLLogLink48$coefficients$fixed[2],4),
+                                 round(krillDensity_MNZGLMMPQLLogLink120$coefficients$fixed[2],4),
+                                 round(krillDensity_MNZGLMMPQLLogLink240$coefficients$fixed[2],4)
+                                 ),
+                       Intercept = c(round(krillDensity_MNZGLMMPQLLogLink24$coefficients$fixed[1],4),
+                                     round(krillDensity_MNZGLMMPQLLogLink48$coefficients$fixed[1],4),
+                                     round(krillDensity_MNZGLMMPQLLogLink120$coefficients$fixed[1],4),
+                                     round(krillDensity_MNZGLMMPQLLogLink240$coefficients$fixed[1],4)
+                                 ),
+                       pValue = c(round(anovaMNZGLMMPQLLogLink24$`Pr(>Chisq)`,5),
+                                  round(anovaMNZGLMMPQLLogLink48$`Pr(>Chisq)`,5),
+                                  round(anovaMNZGLMMPQLLogLink120$`Pr(>Chisq)`,5),
+                                  round(anovaMNZGLMMPQLLogLink240$`Pr(>Chisq)`,5)
+                                  )
+)
+tMNZGLMMPQLLogLink
+```
+
+```{r modelOutMNZ_PQLLogLink, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+plot_models(krillDensity_MNZGLMMPQLLogLink24,krillDensity_MNZGLMMPQLLogLink48,krillDensity_MNZGLMMPQLLogLink120,krillDensity_MNZGLMMPQLLogLink240,
+           vline.color = "red",show.p=TRUE, p.shape = FALSE,show.values=TRUE, 
+           show.legend = FALSE, transform = "exp",
+           dot.size = 4, value.size = 12, line.size = 1.25,
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("Mean of Non-Zero Krill Density ~ FTLE", 
+          subtitle = "GLMM_PQL Log-Link with Spatial Autocorrelation Structure")+
+  scale_color_manual(values=c("#440154FF",    
+                               "#31688EFF",  
+                              "#35B779FF",
+                              "#FDE725FF"
+                              ) 
+                     ) +
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+
+##### Max Density
+
+For every 600 meter column, we calculated the maximum krill density for cells containing krill. 
+
+```{r krill_MaxGLMMPQL_LogLink, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+## 24
+# Use previously processed model to save time
+if(!exists("krillDensity_MaxGLMMPQLLogLink24")){
+  krillDensity_MaxGLMMPQLLogLink24 <- glmmPQL(KrillDensity_Max ~ ftle24_L ,
+                                  random = ~ 1 | Year/Season/Line,
+                                  family = Gamma(link = "log"),
+                                  correlation = corExp(form = ~ Long+Lat),
+                                  data = dataGamm %>% dplyr::filter(!is.na(ftle24_L),KrillBiomass > 0) )
+  # Save Model results to a file
+  saveRDS(krillDensity_MaxGLMMPQLLogLink24, file = "./Models/krillDensity_MaxGLMMPQLLogLink24.rds")
+}
+anovaMaxGLMMPQLLogLink24 <- car::Anova(krillDensity_MaxGLMMPQLLogLink24, type=2)
+
+## 48
+# Use previously processed model to save time
+if(!exists("krillDensity_MaxGLMMPQLLogLink48")){
+  krillDensity_MaxGLMMPQLLogLink48 <- glmmPQL(KrillDensity_Max ~ ftle48_L ,
+                                  random = ~ 1 | Year/Season/Line,
+                                  family = Gamma(link = "log"),
+                                  correlation = corExp(form = ~ Long+Lat),
+                                  data = dataGamm %>% dplyr::filter(!is.na(ftle48_L),KrillBiomass > 0) )
+  # Save Model results to a file
+  saveRDS(krillDensity_MaxGLMMPQLLogLink48, file = "./Models/krillDensity_MaxGLMMPQLLogLink48.rds")
+}
+anovaMaxGLMMPQLLogLink48 <- car::Anova(krillDensity_MaxGLMMPQLLogLink48, type=2)
+
+## 120
+# Use previously processed model to save time
+if(!exists("krillDensity_MaxGLMMPQLLogLink120")){
+  krillDensity_MaxGLMMPQLLogLink120 <- glmmPQL(KrillDensity_Max ~ ftle120_L ,
+                                  random = ~ 1 | Year/Season/Line,
+                                  family = Gamma(link = "log"),
+                                  correlation = corExp(form = ~ Long+Lat),
+                                  data = dataGamm %>% dplyr::filter(!is.na(ftle120_L),KrillBiomass > 0) )
+  # Save Model results to a file
+  saveRDS(krillDensity_MaxGLMMPQLLogLink120, file = "./Models/krillDensity_MaxGLMMPQLLogLink120.rds")
+}
+anovaMaxGLMMPQLLogLink120 <- car::Anova(krillDensity_MaxGLMMPQLLogLink120, type=2)
+
+## 240
+# Use previously processed model to save time
+if(!exists("krillDensity_MaxGLMMPQLLogLink240")){
+  krillDensity_MaxGLMMPQLLogLink240 <- glmmPQL(KrillDensity_Max ~ ftle240_L ,
+                                  random = ~ 1 | Year/Season/Line,
+                                  family = Gamma(link = "log"),
+                                  correlation = corExp(form = ~ Long+Lat),
+                                  data = dataGamm %>% dplyr::filter(!is.na(ftle240_L),KrillBiomass > 0) )
+  # Save Model results to a file
+  saveRDS(krillDensity_MaxGLMMPQLLogLink240, file = "./Models/krillDensity_MaxGLMMPQLLogLink240.rds")
+}
+anovaMaxGLMMPQLLogLink240 <- car::Anova(krillDensity_MaxGLMMPQLLogLink240, type=2)
+
+tMaxGLMMPQLLogLink <- data.frame(Model = c(rep("GLMMPQL_LogLink KrillDensity_Max",4) ),
+                       FTLE_Integration = c("24","48","120", "240"),
+                       Slope = c(round(krillDensity_MaxGLMMPQLLogLink24$coefficients$fixed[2],4),
+                                 round(krillDensity_MaxGLMMPQLLogLink48$coefficients$fixed[2],4),
+                                 round(krillDensity_MaxGLMMPQLLogLink120$coefficients$fixed[2],4),
+                                 round(krillDensity_MaxGLMMPQLLogLink240$coefficients$fixed[2],4)
+                                 ),
+                       Intercept = c(round(krillDensity_MaxGLMMPQLLogLink24$coefficients$fixed[1],4),
+                                     round(krillDensity_MaxGLMMPQLLogLink48$coefficients$fixed[1],4),
+                                     round(krillDensity_MaxGLMMPQLLogLink120$coefficients$fixed[1],4),
+                                     round(krillDensity_MaxGLMMPQLLogLink240$coefficients$fixed[1],4)
+                                 ),
+                       pValue = c(round(anovaMaxGLMMPQLLogLink24$`Pr(>Chisq)`,5),
+                                  round(anovaMaxGLMMPQLLogLink48$`Pr(>Chisq)`,5),
+                                  round(anovaMaxGLMMPQLLogLink120$`Pr(>Chisq)`,5),
+                                  round(anovaMaxGLMMPQLLogLink240$`Pr(>Chisq)`,5)
+                                  )
+)
+tMaxGLMMPQLLogLink
+```
+
+```{r modelOutMax_PQLLogLink, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+plot_models(krillDensity_MaxGLMMPQLLogLink24,krillDensity_MaxGLMMPQLLogLink48,krillDensity_MaxGLMMPQLLogLink120,krillDensity_MaxGLMMPQLLogLink240,
+           vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, show.legend = FALSE, transform = "exp",
+          dot.size = 4, value.size = 12, line.size = 1.25,
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("Maximum of Non-Zero Krill Density ~ FTLE", subtitle = "GLMM_PQL Log-Link with Spatial Autocorrelation Structure")+
+    scale_color_manual(values=c("#440154FF",    
+                               "#31688EFF",  
+                              "#35B779FF",
+                              "#FDE725FF"
+                              ) 
+                     ) +
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+
+##### Supplemental Figure 3
+
+```{r p_densityGLMM_All, fig.height=14, fig.width=12, message=FALSE, warning=FALSE}
+  p_DensityAll <- plot_models(krillDensity_MaxGLMMPQLLogLink24,krillDensity_MaxGLMMPQLLogLink48,
+                              krillDensity_MaxGLMMPQLLogLink120,krillDensity_MaxGLMMPQLLogLink240,
+                              krillDensity_MNZGLMMPQLLogLink24,krillDensity_MNZGLMMPQLLogLink48,
+                              krillDensity_MNZGLMMPQLLogLink120,krillDensity_MNZGLMMPQLLogLink240,
+                              krillDensity_gMNZGLMMPQLLogLink24,krillDensity_gMNZGLMMPQLLogLink48,
+                              krillDensity_gMNZGLMMPQLLogLink120,krillDensity_gMNZGLMMPQLLogLink240,
+                              vline.color = "red",show.p=TRUE,show.values=TRUE, spacing = .75, 
+                              #axis.lim = c(0.75,7.5),
+                              show.legend = TRUE, dot.size = 6, value.size = 10, line.size = 2,
+                              axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) +
+    # ggtitle("Metrics of Krill Density ~ FTLE", subtitle = "glmmPQL Log-Link with Spatial Autocorrelation Structure")+
+    ylim(0.25,10)+
+    theme_minimal() +
+    theme(axis.title = element_text(face="bold", size=30),
+          axis.text = element_text( face="bold", size=30),
+          plot.title = element_text(face="bold", size=25,hjust = 0.5),
+          plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+          plot.caption = element_text( face="bold", size=12,hjust = 0),
+          legend.position = c(0.72,0.5),
+          legend.direction = "vertical",
+          legend.background = element_rect(fill="white",color="black"),
+          legend.text = element_text(face="bold", size=28),
+          legend.title = element_text(face="bold", size=30, hjust = 0.5))
+  
+  p_DensityAll$guides$colour$title <- "Response Variable"
+  p_DensityAll$data$group <- factor(x = c(rep("Max of Non-Zero Cells",4), rep("Mean of Non-Zero Cells",4), rep("GeoMean of Non-Zero Cells",4)), 
+                                    levels = c( "Max of Non-Zero Cells", "Mean of Non-Zero Cells","GeoMean of Non-Zero Cells") )
+  p_DensityAll <- p_DensityAll + scale_color_manual(breaks=c( "Max of Non-Zero Cells",
+                                                              "Mean of Non-Zero Cells" ,    
+                                                              "GeoMean of Non-Zero Cells"),
+                                                    values=c( "Mean of Non-Zero Cells" =  "#440154FF",    
+                                                              "GeoMean of Non-Zero Cells" =  "#31688EFF",
+                                                              "Max of Non-Zero Cells" =  "#35B779FF"
+  ) )
+  p_DensityAll
+```
+
+##### Figure 3B
+
+```{r p_densitygeoMNZ_GLMMPQL, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+testSetp24 <- data.frame(ftle24_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in Response scale
+testSetp24$fit <- predict(krillDensity_gMNZGLMMPQLLogLink24,testSetp24, type = "response", level=0)
+# This function outputs the predicted SE values in Log scale
+SE_p24 <- predictSE(krillDensity_gMNZGLMMPQLLogLink24,testSetp24, type = "response", level = 0,se.fit = TRUE)
+# Convert the Log Standard errors into the Response scale
+testSetp24$lwr <- exp(SE_p24$fit-SE_p24$se.fit)
+testSetp24$upr <- exp(SE_p24$fit+SE_p24$se.fit)
+testSetp24$model <- "24 hrs"
+
+testSetp48 <- data.frame(ftle48_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in Response scale
+testSetp48$fit <- predict(krillDensity_gMNZGLMMPQLLogLink48,testSetp48, type = "response", level=0)
+# This function outputs the predicted SE values in Log scale
+SE_p48 <- predictSE(krillDensity_gMNZGLMMPQLLogLink48,testSetp48, type = "response", level = 0,se.fit = TRUE)
+# Convert the Log Standard errors into the Response scale
+testSetp48$lwr <- exp(SE_p48$fit-SE_p48$se.fit)
+testSetp48$upr <- exp(SE_p48$fit+SE_p48$se.fit)
+testSetp48$model <- "48 hrs"
+
+testSetp120 <- data.frame(ftle120_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in Response scale
+testSetp120$fit <- predict(krillDensity_gMNZGLMMPQLLogLink120,testSetp120, type = "response", level=0)
+# This function outputs the predicted SE values in Log scale
+SE_p120 <- predictSE(krillDensity_gMNZGLMMPQLLogLink120,testSetp120, type = "response", level = 0,se.fit = TRUE)
+# Convert the Log Standard errors into the Response scale
+testSetp120$lwr <- exp(SE_p120$fit-SE_p120$se.fit)
+testSetp120$upr <- exp(SE_p120$fit+SE_p120$se.fit)
+testSetp120$model <- "120 hrs"
+
+testSetp240 <- data.frame(ftle240_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in Response scale
+testSetp240$fit <- predict(krillDensity_gMNZGLMMPQLLogLink240,testSetp240, type = "response", level=0)
+# This function outputs the predicted SE values in Log scale
+SE_p240 <- predictSE(krillDensity_gMNZGLMMPQLLogLink240,testSetp240, type = "response", level = 0,se.fit = TRUE)
+# Convert the Log Standard errors into the Response scale
+testSetp240$lwr <- exp(SE_p240$fit-SE_p240$se.fit)
+testSetp240$upr <- exp(SE_p240$fit+SE_p240$se.fit)
+testSetp240$model <- "240 hrs"
+
+ggplot() + 
+  geom_ribbon(data=testSetp240,aes(x=ftle240_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSetp240,aes(x=ftle240_L,y = fit, color=model), size = 2, linetype=1)+
+  geom_ribbon(data=testSetp48,aes(x=ftle48_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSetp48,aes(x=ftle48_L,y = fit, color=model), size = 2, linetype=2)+
+  geom_ribbon(data=testSetp24,aes(x=ftle24_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSetp24,aes(x=ftle24_L,y = fit, color=model), size = 2, linetype=2)+
+  geom_ribbon(data=testSetp120,aes(x=ftle120_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +  
+  geom_line(data=testSetp120,aes(x=ftle120_L,y = fit, color=model), size = 2, linetype=1)+
+  scale_color_manual(name= "FTLE\nIntegration",
+                       breaks=c("24 hrs","48 hrs","120 hrs","240 hrs"),
+                       values=c( "24 hrs" =     "#FDE725FF",   
+                               "48 hrs" = "#35B779FF",
+                               "120 hrs" =  "#31688EFF",
+                               "240 hrs" = "#440154FF"
+                               )) +
+  scale_fill_manual(name= "FTLE\nIntegration",
+                      breaks=c("24 hrs","48 hrs","120 hrs","240 hrs"),
+                       values=c( "24 hrs" =     "#FDE725FF",   
+                               "48 hrs" = "#35B779FF",
+                               "120 hrs" =  "#31688EFF",
+                               "240 hrs" = "#440154FF"
+                               )) +
+  scale_x_continuous(breaks=seq(-1.5,2,.5),limits=c(-1.75,1.76), expand = c(0.005, 0.025))+
+  scale_y_log10(expand = c(0.0000000001,0.075)
+  )+ 
+  ylab(expression( bold(Krill~Density~(g/~m^{bold("3")})))) +    #Krill Density (g/m^3)
+  xlab(expression( bold(FTLE~(day^bold({bold("-1")})))) )+  
+  guides(fill = guide_legend(order=1,override.aes = list(alpha=0.25, linetype=1)),
+         color = guide_legend(order=1,override.aes = list(alpha=1, linetype=1,fill=NA))
+         )+
+  labs(caption = "Dashed lines indicate p-values > .05") + 
+  ggtitle("Krill Density (Geometric Mean of Non-Zero Cells) ~ FTLE",subtitle = "glmmPQL with Spatial Autocorrelation Structure") +
+  theme_pubclean()+
+  theme(axis.title = element_text(face="bold", size=30),
+        axis.text = element_text( face="bold", size=28),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=18,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=14,hjust = 0),
+        legend.position="right",
+        legend.text = element_text(face="bold", size=28),
+        legend.title = element_text(face="bold", size=30),
+        legend.key.size = unit(2,"cm"),
+        strip.text.x = element_text(size = 22, face="bold"))
+```
+
+## FTLE and Cetacean Sightings
+
+### 4. Are Cetacean sightings more likely in areas with higher FTLE?
+
+#### GLMM (Whale Presence ~ FTLE)
+
+##### Blue Whale Sightings
+
+The relationship between the likelihood of blue whale presence and FTLE is explored using a linear mixed-effects model. Here we are using a logistic regression to test the probability of blue whale presence across a range of FTLE values for each of the 4 integration times. 
+
+```{r BW_glmmPQL, eval=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=TRUE, paged.print=TRUE}
+# Use previously processed model to save time
+if(!exists("bw_glmmPQL_24_Hrs")){
+  bw_glmmPQL_24_Hrs <- glmmPQL(BLWH ~ ftle24_L , 
+                                random = ~ 1 | Year/Season/Line,
+                                family = binomial(link = "logit"),
+                                data = dataGamm %>% dplyr::filter(!is.na(ftle24_L)))
+}
+
+# Use previously processed model to save time
+if(!exists("bw_glmmPQL_48_Hrs")){
+  bw_glmmPQL_48_Hrs <- glmmPQL(BLWH ~ ftle48_L,
+                                random = ~ 1 | Year/Season/Line,
+                                family = binomial(link = "logit"),
+                                data = dataGamm %>% dplyr::filter(!is.na(ftle48_L)))
+}
+
+# Use previously processed model to save time
+if(!exists("bw_glmmPQL_120_Hrs")){
+  bw_glmmPQL_120_Hrs <- glmmPQL(BLWH ~ ftle120_L,
+                                random = ~ 1 | Year/Season/Line,
+                                family = binomial(link = "logit"),
+                                data = dataGamm %>% dplyr::filter(!is.na(ftle120_L)))
+}
+
+# Use previously processed model to save time
+if(!exists("bw_glmmPQL_240_Hrs")){
+  bw_glmmPQL_240_Hrs <- glmmPQL(BLWH ~ ftle240_L,
+                                random = ~ 1 | Year/Season/Line,
+                                family = binomial(link = "logit"),
+                                data = dataGamm %>% dplyr::filter(!is.na(ftle240_L)))
+}
+
+cat(paste0("bw_glmmPQL_24_Hrs: ",  "Slope: ", 
+           round(as.data.frame(coef(summary(bw_glmmPQL_24_Hrs)))$Value[2],3), ", p-value: ",
+           round(as.data.frame(coef(summary(bw_glmmPQL_24_Hrs)))$'p-value'[2],4)))
+
+tBW <- data.frame(Model = rep("BLWH Presence ~ FTLE",4),
+                  FTLE_Integration = c("24","48","120", "240"),
+                  Slope = 
+                    c(round(as.data.frame(coef(summary(bw_glmmPQL_24_Hrs)))$Value[2],3),
+                      round(as.data.frame(coef(summary(bw_glmmPQL_48_Hrs)))$Value[2],3),
+                      round(as.data.frame(coef(summary(bw_glmmPQL_120_Hrs)))$Value[2],3),
+                      round(as.data.frame(coef(summary(bw_glmmPQL_240_Hrs)))$Value[2],3)
+                      ),
+                  Intercept = 
+                    c(round(as.data.frame(coef(summary(bw_glmmPQL_24_Hrs)))$Value[1],3),
+                      round(as.data.frame(coef(summary(bw_glmmPQL_48_Hrs)))$Value[1],3),
+                      round(as.data.frame(coef(summary(bw_glmmPQL_120_Hrs)))$Value[1],3),
+                      round(as.data.frame(coef(summary(bw_glmmPQL_240_Hrs)))$Value[1],3)
+                      ),
+                  pValue = 
+                    c(round(as.data.frame(coef(summary(bw_glmmPQL_24_Hrs)))$'p-value'[2],5),
+                      round(as.data.frame(coef(summary(bw_glmmPQL_48_Hrs)))$'p-value'[2],5),
+                      round(as.data.frame(coef(summary(bw_glmmPQL_120_Hrs)))$'p-value'[2],5),
+                      round(as.data.frame(coef(summary(bw_glmmPQL_240_Hrs)))$'p-value'[2],5)
+                      )
+  )
+tBW
+```
+
+```{r bw_glmmPQL_PresAbs_PlotModels, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE, include=FALSE}
+# Plot the models together
+plot_models(bw_glmmPQL_24_Hrs,bw_glmmPQL_48_Hrs,bw_glmmPQL_120_Hrs,bw_glmmPQL_240_Hrs,
+           vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, show.legend = FALSE,
+           dot.size = 4, value.size = 12, line.size = 1.25,
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("Probability of Blue Whale Presence ~ FTLE")+
+      scale_color_manual(values=c("#440154FF",    
+                               "#31688EFF",  
+                              "#35B779FF",
+                              "#FDE725FF"
+                              ) 
+                     ) +
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+```
+
+##### Figure 3C
+
+```{r p_bw_ftleGLMMPQL, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+testSet_bw_p24 <- data.frame(ftle24_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in probability space
+testSet_bw_p24$fit <- predict(bw_glmmPQL_24_Hrs,testSet_bw_p24, type = "response", level=0)
+
+# This function outputs the predicted values in Logit space
+SE_p24 <- predictSE(bw_glmmPQL_24_Hrs,testSet_bw_p24, type = "response", level = 0,se.fit = TRUE)
+# Convert the Logit Standard errors into Probabilities
+testSet_bw_p24$lwr <- logit2prob(SE_p24$fit-SE_p24$se.fit)
+testSet_bw_p24$upr <- logit2prob(SE_p24$fit+SE_p24$se.fit)
+testSet_bw_p24$model <- "24 hrs"
+
+testSet_bw_p48 <- data.frame(ftle48_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in probability space
+testSet_bw_p48$fit <- predict(bw_glmmPQL_48_Hrs,testSet_bw_p48, type = "response", level=0)
+# This function outputs the predicted values in Logit space
+SE_p48 <- predictSE(bw_glmmPQL_48_Hrs,testSet_bw_p48, type = "response", level = 0,se.fit = TRUE)
+# Convert the Logit Standard errors into Probabilities
+testSet_bw_p48$lwr <- logit2prob(SE_p48$fit-SE_p48$se.fit)
+testSet_bw_p48$upr <- logit2prob(SE_p48$fit+SE_p48$se.fit)
+testSet_bw_p48$model <- "48 hrs"
+
+testSet_bw_p120 <- data.frame(ftle120_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in probability space
+testSet_bw_p120$fit <- predict(bw_glmmPQL_120_Hrs,testSet_bw_p120, type = "response", level=0)
+# This function outputs the predicted values in Logit space
+SE_p120 <- predictSE(bw_glmmPQL_120_Hrs,testSet_bw_p120, type = "response", level = 0,se.fit = TRUE)
+# Convert the Logit Standard errors into Probabilities
+testSet_bw_p120$lwr <- logit2prob(SE_p120$fit-SE_p120$se.fit)
+testSet_bw_p120$upr <- logit2prob(SE_p120$fit+SE_p120$se.fit)
+testSet_bw_p120$model <- "120 hrs"
+
+testSet_bw_p240 <- data.frame(ftle240_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in probability space
+testSet_bw_p240$fit <- predict(bw_glmmPQL_240_Hrs,testSet_bw_p240, type = "response", level=0)
+# This function outputs the predicted values in Logit space
+SE_p240 <- predictSE(bw_glmmPQL_240_Hrs,testSet_bw_p240, type = "response", level = 0,se.fit = TRUE)
+# Convert the Logit Standard errors into Probabilities
+testSet_bw_p240$lwr <- logit2prob(SE_p240$fit-SE_p240$se.fit)
+testSet_bw_p240$upr <- logit2prob(SE_p240$fit+SE_p240$se.fit)
+testSet_bw_p240$model <- "240 hrs"
+
+ggplot() + 
+  geom_ribbon(data=testSet_bw_p24,aes(x=ftle24_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSet_bw_p24,aes(x=ftle24_L,y = fit, color=model), size = 2, linetype=1)+
+  geom_ribbon(data=testSet_bw_p240,aes(x=ftle240_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSet_bw_p240,aes(x=ftle240_L,y = fit, color=model), size = 2, linetype=1)+
+  geom_ribbon(data=testSet_bw_p48,aes(x=ftle48_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSet_bw_p48,aes(x=ftle48_L,y = fit, color=model), size = 2, linetype=1)+
+
+  geom_ribbon(data=testSet_bw_p120,aes(x=ftle120_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +  
+  geom_line(data=testSet_bw_p120,aes(x=ftle120_L,y = fit, color=model), size = 2, linetype=1)+
+ scale_color_manual(name= "FTLE\nIntegration",
+                       breaks=c("24 hrs","48 hrs","120 hrs","240 hrs"),
+                       values=c( "24 hrs" =     "#FDE725FF",   
+                               "48 hrs" = "#35B779FF",
+                               "120 hrs" =  "#31688EFF",
+                               "240 hrs" = "#440154FF"
+                               )) +
+  scale_fill_manual(name= "FTLE\nIntegration",
+                      breaks=c("24 hrs","48 hrs","120 hrs","240 hrs"),
+                       values=c( "24 hrs" =     "#FDE725FF",   
+                               "48 hrs" = "#35B779FF",
+                               "120 hrs" =  "#31688EFF",
+                               "240 hrs" = "#440154FF"
+                               )) +
+  scale_x_continuous(breaks=seq(-1.5,2,.5),limits=c(-1.75,1.76), expand = c(0.005, 0.025))+
+  scale_y_log10(name="Sighting Probability",limits=c(-5,-0.4), 
+              breaks = c(0.00001,0.0001,0.001, 0.01, 0.1, 0.2, 0.4),
+              labels = c(expression(bold("10"^bold("-5") )), expression(bold("10"^bold("-4") )),
+                         expression(bold("10"^bold("-3") )),
+                         expression(bold("0.01")),expression(bold("0.10")),
+                         expression(bold("0.20")),expression(bold("0.40"))),
+              expand = c(0.0000000001,0.075)
+           )+    
+  xlab(expression( bold(FTLE~(day^bold({bold("-1")})))) )+  
+  guides(fill = guide_legend(order=1,override.aes = list(alpla=0.05)),
+         color = guide_legend(order=1,override.aes = list(alpla=1)))+
+  labs(caption = "Dashed lines indicate p-values > .05") + 
+  # ggtitle("Blue Whale Presence ~ FTLE") +
+  theme_pubclean()+
+  theme(axis.title = element_text(face="bold", size=30),
+        axis.text = element_text( face="bold", size=28),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=18,hjust = 0.5),
+          plot.caption = element_text( face="bold", size=20,hjust = 0),
+          legend.position= "top",
+          legend.direction = "horizontal",
+          legend.text = element_text(face="bold", size=28),
+          legend.title = element_text(face="bold", size=30,hjust=0.5),
+          legend.key.size = unit(2,"cm"),
+        strip.text.x = element_text(size = 22, face="bold"))
+```
+
+##### Humpback Whale Sightings (HUWH Presence ~ FTLE)
+
+The relationship between the likelihood of humpback whale presence and FTLE is explored using a linear mixed-effects model. Here we are using a logistic regression to test the probability of humpback whale presence across a range of FTLE values for each of the 4 integration times. 
+
+```{r MN_glmmPQL, eval=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=TRUE, paged.print=TRUE}
+# Use previously processed model to save time
+if(!exists("mn_glmmPQL_24_Hrs")){
+  mn_glmmPQL_24_Hrs <- glmmPQL(HUWH ~ ftle24_L , 
+                                random = ~ 1 | Year/Season/Line,
+                                family = binomial(link = "logit"),
+                                data = dataGamm %>% dplyr::filter(!is.na(ftle24_L)))
+}
+
+# Use previously processed model to save time
+if(!exists("mn_glmmPQL_48_Hrs")){
+  mn_glmmPQL_48_Hrs <- glmmPQL(HUWH ~ ftle48_L,
+                                random = ~ 1 | Year/Season/Line,
+                                family = binomial(link = "logit"),
+                                data = dataGamm %>% dplyr::filter(!is.na(ftle48_L)))
+}
+
+# Use previously processed model to save time
+if(!exists("mn_glmmPQL_120_Hrs")){
+  mn_glmmPQL_120_Hrs <- glmmPQL(HUWH ~ ftle120_L,
+                                random = ~ 1 | Year/Season/Line,
+                                family = binomial(link="logit"),
+                                data = dataGamm %>% dplyr::filter(!is.na(ftle120_L)))
+}
+
+# Use previously processed model to save time
+if(!exists("mn_glmmPQL_240_Hrs")){
+  mn_glmmPQL_240_Hrs <- glmmPQL(HUWH ~ ftle240_L,
+                                random = ~ 1 | Year/Season/Line,
+                                family = binomial(link = "logit"),
+                                data = dataGamm %>% dplyr::filter(!is.na(ftle240_L)))
+}
+
+tHW <- data.frame(Model = rep("HUWH Presence ~ FTLE",4),
+                  FTLE_Integration = c("24","48","120", "240"),
+                  Slope = 
+                    c(round(as.data.frame(coef(summary(mn_glmmPQL_24_Hrs)))$Value[2],3),
+                      round(as.data.frame(coef(summary(mn_glmmPQL_48_Hrs)))$Value[2],3),
+                      round(as.data.frame(coef(summary(mn_glmmPQL_120_Hrs)))$Value[2],3),
+                      round(as.data.frame(coef(summary(mn_glmmPQL_240_Hrs)))$Value[2],3)
+                      ),
+                  Intercept = 
+                    c(round(as.data.frame(coef(summary(mn_glmmPQL_24_Hrs)))$Value[1],3),
+                      round(as.data.frame(coef(summary(mn_glmmPQL_48_Hrs)))$Value[1],3),
+                      round(as.data.frame(coef(summary(mn_glmmPQL_120_Hrs)))$Value[1],3),
+                      round(as.data.frame(coef(summary(mn_glmmPQL_240_Hrs)))$Value[1],3)
+                      ),
+                  pValue = 
+                    c(round(as.data.frame(coef(summary(mn_glmmPQL_24_Hrs)))$'p-value'[2],5),
+                      round(as.data.frame(coef(summary(mn_glmmPQL_48_Hrs)))$'p-value'[2],5),
+                      round(as.data.frame(coef(summary(mn_glmmPQL_120_Hrs)))$'p-value'[2],5),
+                      round(as.data.frame(coef(summary(mn_glmmPQL_240_Hrs)))$'p-value'[2],5)
+                      )
+  )
+tHW
+```
+
+```{r mn_glmmPQL_PresAbs_PlotModels, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE, include=FALSE}
+# Plot the models together
+plot_models(mn_glmmPQL_24_Hrs,mn_glmmPQL_48_Hrs,mn_glmmPQL_120_Hrs,mn_glmmPQL_240_Hrs,
+           vline.color = "red",show.p=TRUE,p.shape = FALSE,show.values=TRUE, show.legend = FALSE,
+           dot.size = 4, value.size = 12, line.size = 1.25,
+           axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) + 
+  ggtitle("Probability of Humpback Whale Presence ~ FTLE")+
+      scale_color_manual(values=c("#440154FF",    
+                               "#31688EFF",  
+                              "#35B779FF",
+                              "#FDE725FF"
+                              ) 
+                     ) +
+  theme_minimal() +
+  theme(axis.title = element_text(face="bold", size=20),
+        axis.text = element_text( face="bold", size=20),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+        plot.caption = element_text( face="bold", size=18,hjust = 0),
+        legend.text = element_text(face="bold", size=20),
+        legend.title = element_text(face="bold", size=24))
+  
+```
+
+```{r p_mn_ftleGLMMPQL, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=FALSE, include=FALSE}
+testSet_mn_p24 <- data.frame(ftle24_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in probability space
+testSet_mn_p24$fit <- predict(mn_glmmPQL_24_Hrs,testSet_mn_p24, type = "response", level=0)
+# This function outputs the predicted values in Logit space
+SE_p24 <- predictSE(mn_glmmPQL_24_Hrs,testSet_mn_p24, type = "response", level = 0,se.fit = TRUE)
+# Convert the Logit Standard errors into Probabilities
+testSet_mn_p24$lwr <- logit2prob(SE_p24$fit-SE_p24$se.fit)
+testSet_mn_p24$upr <- logit2prob(SE_p24$fit+SE_p24$se.fit)
+testSet_mn_p24$model <- "24 hrs"
+
+testSet_mn_p48 <- data.frame(ftle48_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in probability space
+testSet_mn_p48$fit <- predict(mn_glmmPQL_48_Hrs,testSet_mn_p48, type = "response", level=0)
+# This function outputs the predicted values in Logit space
+SE_p48 <- predictSE(mn_glmmPQL_48_Hrs,testSet_mn_p48, type = "response", level = 0,se.fit = TRUE)
+# Convert the Logit Standard errors into Probabilities
+testSet_mn_p48$lwr <- logit2prob(SE_p48$fit-SE_p48$se.fit)
+testSet_mn_p48$upr <- logit2prob(SE_p48$fit+SE_p48$se.fit)
+testSet_mn_p48$model <- "48 hrs"
+
+testSet_mn_p120 <- data.frame(ftle120_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in probability space
+testSet_mn_p120$fit <- predict(mn_glmmPQL_120_Hrs,testSet_mn_p120, type = "response", level=0)
+# This function outputs the predicted values in Logit space
+SE_p120 <- predictSE(mn_glmmPQL_120_Hrs,testSet_mn_p120, type = "response", level = 0,se.fit = TRUE)
+# Convert the Logit Standard errors into Probabilities
+testSet_mn_p120$lwr <- logit2prob(SE_p120$fit-SE_p120$se.fit)
+testSet_mn_p120$upr <- logit2prob(SE_p120$fit+SE_p120$se.fit)
+testSet_mn_p120$model <- "120 hrs"
+
+testSet_mn_p240 <- data.frame(ftle240_L = seq(-2, 2, length.out = 1000)) 
+# This function outputs the predicted values in probability space
+testSet_mn_p240$fit <- predict(mn_glmmPQL_240_Hrs,testSet_mn_p240, type = "response", level=0)
+# This function outputs the predicted values in Logit space
+SE_p240 <- predictSE(mn_glmmPQL_240_Hrs,testSet_mn_p240, type = "response", level = 0,se.fit = TRUE)
+# Convert the Logit Standard errors into Probabilities
+testSet_mn_p240$lwr <- logit2prob(SE_p240$fit-SE_p240$se.fit)
+testSet_mn_p240$upr <- logit2prob(SE_p240$fit+SE_p240$se.fit)
+testSet_mn_p240$model <- "240 hrs"
+
+ggplot() + 
+  geom_ribbon(data=testSet_mn_p240,aes(x=ftle240_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSet_mn_p240,aes(x=ftle240_L,y = fit, color=model), size = 2, linetype=2)+
+  geom_ribbon(data=testSet_mn_p48,aes(x=ftle48_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSet_mn_p48,aes(x=ftle48_L,y = fit, color=model), size = 2, linetype=1)+
+  geom_ribbon(data=testSet_mn_p24,aes(x=ftle24_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +
+  geom_line(data=testSet_mn_p24,aes(x=ftle24_L,y = fit, color=model), size = 2, linetype=1)+
+  geom_ribbon(data=testSet_mn_p120,aes(x=ftle120_L,ymin = lwr, ymax = upr, color = NULL,fill=model), alpha = .15) +  
+  geom_line(data=testSet_mn_p120,aes(x=ftle120_L,y = fit, color=model), size = 2, linetype=2)+
+ scale_color_manual(name= "FTLE\nIntegration",
+                       breaks=c("24 hrs","48 hrs","120 hrs","240 hrs"),
+                       values=c( "24 hrs" =     "#FDE725FF",   
+                               "48 hrs" = "#35B779FF",
+                               "120 hrs" =  "#31688EFF",
+                               "240 hrs" = "#440154FF"
+                               )) +
+  scale_fill_manual(name= "FTLE\nIntegration",
+                      breaks=c("24 hrs","48 hrs","120 hrs","240 hrs"),
+                       values=c( "24 hrs" =     "#FDE725FF",   
+                               "48 hrs" = "#35B779FF",
+                               "120 hrs" =  "#31688EFF",
+                               "240 hrs" = "#440154FF"
+                               )) +
+  scale_x_continuous(breaks=seq(-1.5,2,.5),limits=c(-1.75,1.76), expand = c(0.005, 0.025))+
+  scale_y_log10(name="Sighting Probability",limits=c(-5,-0.4), 
+                breaks = c(0.00001,0.0001,0.001, 0.01, 0.1, 0.2, 0.4),
+                labels = c(expression(bold("10"^bold("-5") )), expression(bold("10"^bold("-4") )),
+                           expression(bold("10"^bold("-3") )),
+                           expression(bold("0.01")),expression(bold("0.10")),
+                           expression(bold("0.20")),expression(bold("0.40"))),
+                expand = c(0.0000000001,0.075)
+             )+      
+  xlab(expression( bold(FTLE~(day^bold({bold("-1")})))) )+  
+  guides(fill = guide_legend(order=1,override.aes = list(alpla=0.01)),
+         color = guide_legend(order=1,override.aes = list(alpla=1)))+
+  labs(caption = "Dashed lines indicate p-values > .05") +
+  # ggtitle("Humpback Whale Presence ~ FTLE") +
+  theme_pubclean()+
+    theme(axis.title = element_text(face="bold", size=30),
+        axis.text = element_text( face="bold", size=28),
+        plot.title = element_text(face="bold", size=25,hjust = 0.5),
+        plot.subtitle = element_text( face="bold", size=18,hjust = 0.5),
+          plot.caption = element_text( face="bold", size=20,hjust = 0),
+          legend.position= "top",
+          legend.direction = "horizontal",
+          legend.text = element_text(face="bold", size=28),
+          legend.title = element_text(face="bold", size=30,hjust=0.5),
+          legend.key.size = unit(2,"cm"),
+        strip.text.x = element_text(size = 22, face="bold"))
+```
+
+##### Supplemental Figure 4
+
+```{r all_PresAbs_PlotModels, echo=TRUE, fig.height=14, fig.width=12, message=FALSE, warning=FALSE, paged.print=TRUE}
+# Plot the models together
+  p_WhaleAll <- plot_models(bw_glmmPQL_24_Hrs,bw_glmmPQL_48_Hrs,bw_glmmPQL_120_Hrs,bw_glmmPQL_240_Hrs,
+                            mn_glmmPQL_24_Hrs,mn_glmmPQL_48_Hrs,mn_glmmPQL_120_Hrs,mn_glmmPQL_240_Hrs,
+                            vline.color = "red",show.p=TRUE,show.values=TRUE, spacing = .75, 
+                            #axis.lim = c(0.75,7.5),
+                            show.legend = TRUE, dot.size = 6, value.size = 10, line.size = 2,
+                            axis.labels = c("FTLE (240 Hrs)","FTLE (120 Hrs)","FTLE (48 Hrs)","FTLE (24 Hrs)")) +
+    scale_y_log10( limits = c(-100,200))+
+    theme_minimal() +
+    theme(axis.title = element_text(face="bold", size=30),
+          axis.text = element_text( face="bold", size=30),
+          plot.title = element_text(face="bold", size=25,hjust = 0.5),
+          plot.subtitle = element_text( face="bold", size=20,hjust = 0.5),
+          plot.caption = element_text( face="bold", size=12,hjust = 0),
+          legend.position = c(0.8,0.5),
+          legend.direction = "vertical",
+          legend.background = element_rect(fill="white",color="black"),
+          legend.text = element_text(face="bold", size=28),
+          legend.title = element_text(face="bold", size=30, hjust = 0.5))
+  
+  p_WhaleAll$guides$colour$title <- "Response Variable"
+  
+  p_WhaleAll$data$group <- factor(x = c(rep("Blue Whales",4), rep("Humpback Whales",4)), levels = c("Humpback Whales" , "Blue Whales") )
+  p_WhaleAll <- p_WhaleAll + scale_color_manual(values=c( "Humpback Whales" =  "#440154FF",    
+                                                          "Blue Whales" =  "#31688EFF"
+  ) )
+  p_WhaleAll
+```
+
+## Results Table
+
+```{r ResultsTable, echo=TRUE, fig.height=8, fig.width=12, message=FALSE, warning=TRUE, paged.print=TRUE}
+
+resultsT <- rbind(tssSigmaT_GLMM, tD10_GLMM, tD20_GLMM,tD30_GLMM,tD40_GLMM, tD50_GLMM,
+                  tSigma25_GLMM,tSigma25_5_GLMM,tSigma26_GLMM,
+                  tKrillPres,tgMNZGLMMPQLLogLink,tMNZGLMMPQLLogLink,tMaxGLMMPQLLogLink,
+                  tBW,tHW)
+resultsT_wide <- resultsT %>% 
+  pivot_wider(names_from = FTLE_Integration,values_from = Slope:pValue) %>% 
+  dplyr::select(1,2,6,10,3,7,11,4,8,12,5,9,13)
+write_csv(resultsT_wide,"./Output/Table2-Results.csv"   )
+kable(resultsT,row.names = FALSE,longtable=T) %>% 
+  kable_styling(latex_options=c("striped","repeat_header", "scale_down"))
+```
+
+
+# References
+
++ Matt K Gough, Ad Reniers, M. Josefina Olascoaga, Brian K Haus, Jamie MacMahan, Jeff Paduan, Chris Halle, (2016). *Lagrangian Coherent Structures in a coastal upwelling environment*. Continental Shelf Research, https://doi.org/10.1016/j.csr.2016.09.007
+
++ Fahlbusch, J. A., Czapanskiy, M. F., Calambokidis, J., Cade, D. E., Abrahms, B., Hazen, E. L., & Goldbogen, J. A. (2022). *Blue whales increase feeding rates at fine-scale ocean features*. Proceedings of the Royal Society B, https://royalsocietypublishing.org/doi/full/10.1098/rspb.2022.1180
