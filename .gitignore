@@ -27,3 +27,4 @@ Krill_FTLE_Analysis_PDF_files/*
 
 # Models
 *.rds
+.Rproj.user
