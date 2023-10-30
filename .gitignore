@@ -1,0 +1,30 @@
+.Rproj.user/*
+.Rhistory
+.RData
+.Ruserdata
+*.RData
+*.csv
+*.nc
+*.txt
+*.xlsx
+*.png
+*.html
+*.jpeg
+*.docx
+*.zip
+*.jpg
+*.bmp
+*.pdf
+
+# Input Data
+dataRaw/*
+
+Krill_FTLE_Analysis_cache/*
+Krill_FTLE_Analysis_PDF_cache/*
+Krill_FTLE_Analysis_PDF_files/*
+
+.RDataTmp
+# Output
+
+# Models
+*.rds
